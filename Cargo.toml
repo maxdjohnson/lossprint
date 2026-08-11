@@ -1,0 +1,24 @@
+[package]
+name = "lossprint"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+description = "Detect lossy transcodes hiding in lossless audio collections"
+license = "MIT"
+repository = "https://github.com/maxdjohnson/lossprint"
+
+[dependencies]
+anyhow = "1.0.104"
+clap = { version = "=4.6.6", features = ["derive"] }
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "download-binaries", "tls-native", "api-27"] }
+rayon = "1.12"
+rustfft = "6.4"
+symphonia = { version = "=0.6.1", default-features = false, features = ["aiff", "flac", "pcm", "wav"] }
+walkdir = "2.5"
+
+[target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["coreml"] }
+
+[profile.release]
+lto = "thin"
+strip = true
