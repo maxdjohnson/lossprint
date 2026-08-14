@@ -16,7 +16,7 @@ use walkdir::WalkDir;
 
 const MAX_BATCH_TRACKS: u8 = 8;
 const READY_FILES: usize = 2;
-const DEFAULT_THRESHOLD: f32 = 0.4;
+const DEFAULT_THRESHOLD: f32 = 0.5;
 
 fn default_batch_size(files: usize) -> u8 {
     // Eight tracks per model forward pass gives the best throughput for large Apple
@@ -141,8 +141,8 @@ impl PendingBatch {
     version,
     about = "Detect lossy transcodes hiding in lossless audio files",
     after_help = "Scans WAV, AIFF, and FLAC files. Output is tab-separated:\n\
-                  probability, verdict, codec, path. Use --threshold 0.5 when false\n\
-                  positives cost more than missed transcodes.\n\n\
+                  probability, verdict, codec, path. Raise --threshold to reduce\n\
+                  false positives; lower it to favor recall.\n\n\
                   Includes Symphonia 0.6.1 under MPL-2.0; source:\n\
                   https://github.com/pdeljanov/Symphonia/tree/v0.6.1"
 )]
@@ -305,6 +305,12 @@ mod tests {
     }
 
     #[test]
+    fn default_threshold_is_half() {
+        let args = Args::try_parse_from(["lossprint", "audio.flac"]).unwrap();
+        assert_eq!(args.threshold, 0.5);
+    }
+
+    #[test]
     fn file_score_averages_encoder_probabilities_across_windows() {
         let mut score = FileScore::default();
         score.add(&WindowScore {
@@ -324,16 +330,19 @@ mod tests {
         assert!((score.transcode_probability - 0.8).abs() < f32::EPSILON);
         assert!((score.encoder_probabilities[0] - 0.34).abs() < f32::EPSILON);
         assert!((score.encoder_probabilities[1] - 0.66).abs() < f32::EPSILON);
-        assert_eq!(score.classification(0.4), ("transcode", "aac"));
+        assert_eq!(
+            score.classification(DEFAULT_THRESHOLD),
+            ("transcode", "aac")
+        );
     }
 
     #[test]
     fn clean_tracks_hide_the_encoder_prediction() {
         let score = TrackScore {
-            transcode_probability: 0.39,
+            transcode_probability: 0.49,
             encoder_probabilities: [0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
         };
 
-        assert_eq!(score.classification(0.4), ("clean", "-"));
+        assert_eq!(score.classification(DEFAULT_THRESHOLD), ("clean", "-"));
     }
 }

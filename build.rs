@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const MODEL_URL: &str =
-    "https://huggingface.co/maxdj/lossprint/resolve/65a5c9f703bc3ea44348d4610239c3ed8c1e2b63/model.onnx?download=true";
-const MODEL_VERSION: &str = "v0.4";
+    "https://huggingface.co/maxdj/lossprint/resolve/ae0526389bb0fa3d8cfed08ecfeae0bd7930a8c8/model.onnx?download=true";
+const MODEL_VERSION: &str = "v0.5";
 
 fn install(source: &Path, destination: &Path) -> io::Result<()> {
     if destination.exists() {

@@ -43,7 +43,7 @@ def download_fixtures(destination: Path) -> None:
 
 def invoke(binary: Path, fixtures: Path) -> str:
     result = subprocess.run(
-        [binary, "--threshold", "0.4", fixtures],
+        [binary, fixtures],
         capture_output=True,
         text=True,
     )

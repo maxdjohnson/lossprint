@@ -4,7 +4,7 @@
 from a lossy source before being saved in a lossless container.
 
 ```console
-$ lossprint --threshold 0.5 ~/Music
+$ lossprint ~/Music
 0.9981214	transcode	mp3	/Users/me/Music/suspect.flac
 0.0042187	clean	-	/Users/me/Music/master.flac
 ```
@@ -32,7 +32,7 @@ Install Rust 1.97.1 or newer and `curl`, then run:
 cargo build --release
 ```
 
-Set `LOSSPRINT_MODEL_PATH` to the published v0.4 ONNX file for an offline build:
+Set `LOSSPRINT_MODEL_PATH` to the published v0.5 ONNX file for an offline build:
 
 ```bash
 LOSSPRINT_MODEL_PATH=/absolute/path/model.onnx cargo build --release
@@ -45,13 +45,13 @@ not follow symlinks.
 
 ```bash
 lossprint ~/Music /Volumes/archive
-lossprint --threshold 0.5 ~/Music
+lossprint --threshold 0.7 ~/Music
 lossprint --jobs 4 ~/Music
 lossprint --batch-size 4 ~/Music
 ```
 
-The CLI's default threshold is `0.4`. Use `0.5` when false positives cost more
-than missed transcodes.
+The CLI's default threshold is `0.5`. Raise it to reduce false positives, or
+lower it to favor recall.
 
 `--jobs 0`, the default, uses one worker per logical core. Set a smaller value
 to limit CPU and memory use.
