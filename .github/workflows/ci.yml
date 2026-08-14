@@ -41,12 +41,16 @@ jobs:
         include:
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
+            executable: lossprint
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
+            executable: lossprint
           - runner: macos-15
             target: aarch64-apple-darwin
+            executable: lossprint
           - runner: windows-2022
             target: x86_64-pc-windows-msvc
+            executable: lossprint.exe
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     env:
@@ -123,79 +127,10 @@ jobs:
           if ($actual -ne "lossprint $version") {
             throw "unexpected version output: $actual"
           }
-      - name: Download integration fixtures
-        shell: bash
+      - name: Test packaged artifact
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          mkdir fixtures
-          for attempt in {1..12}; do
-            if gh release download ci-v1 \
-              --repo maxdjohnson/lossprint \
-              --pattern "musdb18-hq-1.wav" \
-              --pattern "musdb18-hq-1.mp3.wav" \
-              --dir fixtures \
-              --clobber; then
-              exit 0
-            fi
-            if [[ "${attempt}" == 12 ]]; then
-              exit 1
-            fi
-            sleep 5
-          done
-      - name: Test packaged Unix artifact
-        if: runner.os != 'Windows'
-        shell: bash
-        run: |
-          set -euo pipefail
-          output="$("smoke/lossprint-${TARGET}/lossprint" --threshold 0.4 fixtures)"
-          printf '%s\n' "${output}"
-          printf '%s\n' "${output}" | awk -F '\t' '
-            NF != 4 { bad = 1 }
-            $2 == "clean" && $3 == "-" &&
-              $4 == "fixtures/musdb18-hq-1.wav" { clean++ }
-            $2 == "transcode" && $3 == "mp3" &&
-              $4 == "fixtures/musdb18-hq-1.mp3.wav" { mp3++ }
-            END { exit !(NR == 2 && !bad && clean == 1 && mp3 == 1) }
-          '
-      - name: Test packaged Windows artifact
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $output = @(& "smoke/lossprint-$env:TARGET/lossprint.exe" --threshold 0.4 fixtures)
-          if ($LASTEXITCODE -ne 0) {
-            throw "packaged lossprint failed with exit code $LASTEXITCODE"
-          }
-          $output | ForEach-Object { Write-Host $_ }
-
-          $expected = @{
-            "musdb18-hq-1.wav" = @("clean", "-")
-            "musdb18-hq-1.mp3.wav" = @("transcode", "mp3")
-          }
-          $seen = @{}
-          foreach ($line in $output) {
-            $fields = $line -split "`t"
-            if ($fields.Count -ne 4) {
-              throw "expected four tab-separated fields: $line"
-            }
-            $name = [IO.Path]::GetFileName($fields[3])
-            if (-not $expected.ContainsKey($name)) {
-              throw "unexpected fixture in output: $name"
-            }
-            if ($seen.ContainsKey($name)) {
-              throw "duplicate fixture in output: $name"
-            }
-            $verdict, $codec = $expected[$name]
-            if ($fields[1] -ne $verdict -or $fields[2] -ne $codec) {
-              throw "unexpected classification for ${name}: $($fields[1]) $($fields[2])"
-            }
-            $seen[$name] = $true
-          }
-          if ($seen.Count -ne $expected.Count) {
-            throw "expected one result for each integration fixture"
-          }
+        run: python tests/cli.py "smoke/lossprint-${{ matrix.target }}/${{ matrix.executable }}"
       - name: Upload release artifact
         uses: actions/upload-artifact@v7
         with:

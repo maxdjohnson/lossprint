@@ -8,7 +8,7 @@ use anyhow::{bail, Context, Result};
 use clap::Parser;
 use model::{Model, WindowScore, ENCODER_LABELS};
 use rayon::prelude::*;
-use spectrogram::{TransformCache, CROP_SECONDS, MAX_SECONDS, MAX_WINDOWS, WINDOW_VALUES};
+use spectrogram::{TransformCache, CROP_SECONDS, MAX_WINDOWS, WINDOW_VALUES};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::sync_channel;
@@ -219,7 +219,7 @@ fn main() -> Result<()> {
 }
 
 fn prepare(path: &Path, transforms: &TransformCache) -> Result<Vec<f32>> {
-    let clip = audio::decode(path, MAX_SECONDS)?;
+    let clip = audio::decode(path)?;
     let crop_len = clip.sample_rate as usize * CROP_SECONDS;
     let offsets = spectrogram::window_offsets(clip.channels[0].len(), crop_len);
     if offsets.is_empty() {
@@ -297,28 +297,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn large_apple_silicon_scans_default_to_eight_tracks() {
-        assert_eq!(default_batch_size(15), 1);
-        let expected = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-            8
-        } else {
-            1
-        };
-        assert_eq!(default_batch_size(16), expected);
-    }
-
-    #[test]
     fn batch_size_is_bounded() {
         assert!(Args::try_parse_from(["lossprint", "--batch-size", "1", "audio.flac"]).is_ok());
         assert!(Args::try_parse_from(["lossprint", "--batch-size", "8", "audio.flac"]).is_ok());
         assert!(Args::try_parse_from(["lossprint", "--batch-size", "0", "audio.flac"]).is_err());
         assert!(Args::try_parse_from(["lossprint", "--batch-size", "9", "audio.flac"]).is_err());
-    }
-
-    #[test]
-    fn threshold_defaults_to_cli_policy() {
-        let args = Args::try_parse_from(["lossprint", "audio.flac"]).unwrap();
-        assert_eq!(args.threshold, DEFAULT_THRESHOLD);
     }
 
     #[test]

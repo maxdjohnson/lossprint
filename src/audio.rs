@@ -6,13 +6,12 @@ use std::path::Path;
 use symphonia::core::audio::GenericAudioBufferRef;
 use symphonia::core::codecs::audio::well_known::{CODEC_ID_PCM_ALAW, CODEC_ID_PCM_MULAW};
 use symphonia::core::codecs::audio::AudioDecoderOptions;
-use symphonia::core::formats::probe::Hint;
-use symphonia::core::formats::{FormatOptions, TrackType};
+use symphonia::core::formats::TrackType;
 use symphonia::core::io::MediaSourceStream;
-use symphonia::core::meta::MetadataOptions;
 use symphonia::default::{get_codecs, get_probe};
 
 const EXTENSIONS: [&str; 4] = ["aif", "aiff", "flac", "wav"];
+const MAX_SECONDS: usize = 20;
 const MIN_SAMPLE_RATE: u32 = 8_000;
 const MAX_SAMPLE_RATE: u32 = 384_000;
 
@@ -31,32 +30,24 @@ pub fn is_supported(path: &Path) -> bool {
         })
 }
 
-/// Decode at most `max_seconds` without resampling, downmixing, or requantizing.
-pub fn decode(path: &Path, max_seconds: usize) -> Result<Clip> {
-    let file = File::open(path).with_context(|| format!("could not open {}", path.display()))?;
+/// Decode at most 20 seconds without resampling, downmixing, or requantizing.
+pub fn decode(path: &Path) -> Result<Clip> {
+    let file = File::open(path).context("could not open file")?;
     let stream = MediaSourceStream::new(Box::new(file), Default::default());
-    let mut hint = Hint::new();
-    if let Some(extension) = path.extension().and_then(|value| value.to_str()) {
-        hint.with_extension(extension);
-    }
 
     let mut format = get_probe()
         .probe(
-            &hint,
+            &Default::default(),
             stream,
-            FormatOptions::default(),
-            MetadataOptions::default(),
+            Default::default(),
+            Default::default(),
         )
-        .with_context(|| format!("could not recognize {}", path.display()))?;
-    let track = format
+        .context("could not recognize audio format")?;
+    let codec = format
         .default_track(TrackType::Audio)
-        .context("audio file has no default track")?;
-    let codec = track
-        .codec_params
-        .as_ref()
-        .context("audio track has no codec parameters")?
-        .audio()
-        .context("default track is not audio")?;
+        .and_then(|track| track.codec_params.as_ref())
+        .and_then(|params| params.audio())
+        .context("audio file has no usable audio track")?;
     if codec.codec == CODEC_ID_PCM_ALAW || codec.codec == CODEC_ID_PCM_MULAW {
         bail!("A-law and mu-law audio are not lossless PCM")
     }
@@ -76,7 +67,7 @@ pub fn decode(path: &Path, max_seconds: usize) -> Result<Clip> {
     if !(1..=2).contains(&channel_count) {
         bail!("{channel_count} channels; only mono and stereo are supported")
     }
-    let wanted_frames = max_seconds * sample_rate as usize;
+    let wanted_frames = MAX_SECONDS * sample_rate as usize;
     let mut channels = (0..channel_count)
         .map(|_| Vec::with_capacity(wanted_frames))
         .collect::<Vec<_>>();
@@ -136,7 +127,7 @@ mod tests {
     }
 
     fn decode_fixture(name: &str) -> Clip {
-        decode(&fixture(name), 20).unwrap()
+        decode(&fixture(name)).unwrap()
     }
 
     #[test]

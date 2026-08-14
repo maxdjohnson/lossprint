@@ -9,7 +9,6 @@ pub const N_BINS: usize = 513;
 pub const N_FRAMES: usize = 173;
 pub const WINDOW_VALUES: usize = 2 * N_BINS * N_FRAMES;
 pub const CROP_SECONDS: usize = 2;
-pub const MAX_SECONDS: usize = 20;
 pub const MAX_WINDOWS: usize = 12;
 const LOG_FLOOR: f32 = -13.815_511; // ln(1e-6)
 

@@ -3,10 +3,7 @@
 use anyhow::{bail, Context, Result};
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 use ort::ep;
-use ort::{
-    session::{OutputSelector, RunOptions, Session},
-    value::TensorRef,
-};
+use ort::{session::Session, value::TensorRef};
 
 use crate::spectrogram::{N_BINS, N_FRAMES, WINDOW_VALUES};
 
@@ -48,16 +45,10 @@ impl Model {
         debug_assert!(!input.is_empty());
         debug_assert!(input.len().is_multiple_of(WINDOW_VALUES));
         let batch = input.len() / WINDOW_VALUES;
-        let tensor =
-            TensorRef::from_array_view(([batch as i64, 2, N_BINS as i64, N_FRAMES as i64], input))?;
-        let options = RunOptions::new()?.with_outputs(
-            OutputSelector::no_default()
-                .with("transcode_probability")
-                .with("encoder_probability"),
-        );
+        let tensor = TensorRef::from_array_view(([batch, 2, N_BINS, N_FRAMES], input))?;
         let outputs = self
             .session
-            .run_with_options(ort::inputs![tensor], &options)
+            .run(ort::inputs![tensor])
             .context("ONNX inference failed")?;
         let transcode = outputs["transcode_probability"]
             .try_extract_tensor::<f32>()?
