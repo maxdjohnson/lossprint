@@ -13,6 +13,17 @@ Each stdout row contains the transcode probability, verdict, predicted codec,
 and path separated by tabs. The codec is `-` for clean files because that
 prediction is meaningful only for transcodes. Errors go to stderr.
 
+## Install
+
+On Apple Silicon macOS, install with Homebrew:
+
+```bash
+brew install maxdjohnson/tap/lossprint
+```
+
+For Linux (x86-64 or ARM64) and Windows (x86-64), download the archive for your
+platform from the [latest GitHub release](https://github.com/maxdjohnson/lossprint/releases/latest).
+
 ## Build
 
 Install Rust 1.97.1 or newer and `curl`, then run:

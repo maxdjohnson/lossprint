@@ -44,3 +44,12 @@ This distribution uses the MIT option for both components:
 > SOFTWARE.
 
 The complete dependency versions are recorded in `Cargo.lock`.
+
+## DirectML (Windows)
+
+The Windows release also redistributes
+[Microsoft DirectML 1.15.4](https://www.nuget.org/packages/Microsoft.AI.DirectML/1.15.4)
+for use by ONNX Runtime. DirectML is licensed under separate Microsoft Software
+License Terms rather than the project MIT license. The exact terms and supplier
+notices are included in the Windows archive as `DirectML_LICENSE.txt` and
+`DirectML_ThirdPartyNotices.txt`.

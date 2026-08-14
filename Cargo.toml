@@ -1,6 +1,6 @@
 [package]
 name = "lossprint"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.97"
 description = "Detect lossy transcodes hiding in lossless audio collections"
@@ -18,6 +18,9 @@ walkdir = "2.5"
 
 [target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
 ort = { version = "=2.0.0-rc.13", default-features = false, features = ["coreml"] }
+
+[target.'cfg(all(target_os = "windows", target_arch = "x86_64"))'.dependencies]
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["copy-dylibs", "directml"] }
 
 [profile.release]
 lto = "thin"
