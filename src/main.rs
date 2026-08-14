@@ -6,7 +6,7 @@ mod spectrogram;
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
-use model::{Model, WindowScore, DEFAULT_THRESHOLD, ENCODER_LABELS};
+use model::{Model, WindowScore, ENCODER_LABELS};
 use rayon::prelude::*;
 use spectrogram::{TransformCache, CROP_SECONDS, MAX_SECONDS, MAX_WINDOWS, WINDOW_VALUES};
 use std::io::{BufWriter, Write};
@@ -16,6 +16,7 @@ use walkdir::WalkDir;
 
 const MAX_BATCH_TRACKS: u8 = 8;
 const READY_FILES: usize = 2;
+const DEFAULT_THRESHOLD: f32 = 0.4;
 
 fn default_batch_size(files: usize) -> u8 {
     // Eight tracks per model forward pass gives the best throughput for large Apple
@@ -49,17 +50,15 @@ impl FileScore {
     }
 
     fn finish(self) -> Result<TrackScore> {
-        match self.error {
-            Some(error) => Err(error),
-            None if self.windows == 0 => bail!("audio has no analysis windows"),
-            None => {
-                let windows = self.windows as f32;
-                Ok(TrackScore {
-                    transcode_probability: self.transcode_sum / windows,
-                    encoder_probabilities: self.encoder_sums.map(|sum| sum / windows),
-                })
-            }
+        if let Some(error) = self.error {
+            return Err(error);
         }
+        debug_assert!(self.windows > 0);
+        let windows = self.windows as f32;
+        Ok(TrackScore {
+            transcode_probability: self.transcode_sum / windows,
+            encoder_probabilities: self.encoder_sums.map(|sum| sum / windows),
+        })
     }
 }
 
@@ -105,6 +104,7 @@ impl PendingBatch {
         model: &mut Model,
         scores: &mut [FileScore],
     ) -> Result<()> {
+        debug_assert!(!windows.is_empty());
         debug_assert!(windows.len().is_multiple_of(WINDOW_VALUES));
         for window in windows.chunks_exact(WINDOW_VALUES) {
             self.input.extend_from_slice(window);
@@ -226,9 +226,7 @@ fn prepare(path: &Path, transforms: &TransformCache) -> Result<Vec<f32>> {
         bail!("audio is shorter than {CROP_SECONDS} seconds")
     }
     let transform = transforms.get(clip.sample_rate)?;
-    let mut input = vec![0.0_f32; offsets.len() * WINDOW_VALUES];
-    transform.write_windows(&clip.channels, &offsets, &mut input);
-    Ok(input)
+    Ok(transform.write_windows(&clip.channels, &offsets))
 }
 
 fn score_all(
@@ -286,7 +284,7 @@ fn discover(inputs: &[PathBuf]) -> Result<Vec<PathBuf>> {
                 }
             }
         } else {
-            bail!("path does not exist: {}", input.display())
+            bail!("path is not a file or directory: {}", input.display())
         }
     }
     files.sort();
@@ -315,6 +313,12 @@ mod tests {
         assert!(Args::try_parse_from(["lossprint", "--batch-size", "8", "audio.flac"]).is_ok());
         assert!(Args::try_parse_from(["lossprint", "--batch-size", "0", "audio.flac"]).is_err());
         assert!(Args::try_parse_from(["lossprint", "--batch-size", "9", "audio.flac"]).is_err());
+    }
+
+    #[test]
+    fn threshold_defaults_to_cli_policy() {
+        let args = Args::try_parse_from(["lossprint", "audio.flac"]).unwrap();
+        assert_eq!(args.threshold, DEFAULT_THRESHOLD);
     }
 
     #[test]

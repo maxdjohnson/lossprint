@@ -39,7 +39,7 @@ lossprint --jobs 4 ~/Music
 lossprint --batch-size 4 ~/Music
 ```
 
-The model's default threshold is `0.4`. Use `0.5` when false positives cost more
+The CLI's default threshold is `0.4`. Use `0.5` when false positives cost more
 than missed transcodes.
 
 `--jobs 0`, the default, uses one worker per logical core. Set a smaller value

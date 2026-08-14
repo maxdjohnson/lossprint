@@ -65,20 +65,21 @@ impl Transform {
         })
     }
 
-    /// Write `[window, 2, 513, 173]` mid/side spectrograms in row-major order.
-    pub fn write_windows(&self, channels: &[Vec<f32>], starts: &[usize], output: &mut [f32]) {
+    /// Return `[window, 2, 513, 173]` mid/side spectrograms in row-major order.
+    pub fn write_windows(&self, channels: &[Vec<f32>], starts: &[usize]) -> Vec<f32> {
         let crop_len = self.crop_len;
-        debug_assert_eq!(output.len(), starts.len() * WINDOW_VALUES);
         debug_assert!((1..=2).contains(&channels.len()));
         debug_assert!(starts.iter().all(|&start| channels
             .iter()
             .all(|channel| start + crop_len <= channel.len())));
 
+        let mut output = vec![0.0_f32; starts.len() * WINDOW_VALUES];
         let mut buffer = vec![Complex32::new(0.0, 0.0); self.n_fft];
         let mut scratch = vec![Complex32::new(0.0, 0.0); self.fft.get_inplace_scratch_len()];
         for (&start, output) in starts.iter().zip(output.chunks_exact_mut(WINDOW_VALUES)) {
             self.write_window(channels, start, output, &mut buffer, &mut scratch);
         }
+        output
     }
 
     fn write_window(
@@ -161,16 +162,15 @@ pub fn window_offsets(total_frames: usize, crop_len: usize) -> Vec<usize> {
         .collect()
 }
 
-fn reflect(mut index: isize, length: usize) -> usize {
+fn reflect(index: isize, length: usize) -> usize {
     let last = length as isize - 1;
-    loop {
-        if index < 0 {
-            index = -index;
-        } else if index > last {
-            index = 2 * last - index;
-        } else {
-            return index as usize;
-        }
+    debug_assert!((-last..=2 * last).contains(&index));
+    if index < 0 {
+        (-index) as usize
+    } else if index > last {
+        (2 * last - index) as usize
+    } else {
+        index as usize
     }
 }
 
@@ -201,8 +201,10 @@ mod tests {
     fn reflect_padding_excludes_the_edge_sample() {
         assert_eq!(reflect(-1, 4), 1);
         assert_eq!(reflect(-2, 4), 2);
+        assert_eq!(reflect(-3, 4), 3);
         assert_eq!(reflect(4, 4), 2);
         assert_eq!(reflect(5, 4), 1);
+        assert_eq!(reflect(6, 4), 0);
     }
 
     #[test]
@@ -210,8 +212,7 @@ mod tests {
         let rate = 32_000;
         let transform = Transform::new(rate).unwrap();
         let channels = vec![vec![0.0_f32; 2 * rate as usize]];
-        let mut output = vec![0.0_f32; WINDOW_VALUES];
-        transform.write_windows(&channels, &[0], &mut output);
+        let output = transform.write_windows(&channels, &[0]);
         assert!(output.iter().all(|value| (*value - LOG_FLOOR).abs() < 1e-6));
     }
 
@@ -223,16 +224,11 @@ mod tests {
             .map(|index| (index % 97) as f32 / 97.0)
             .collect::<Vec<_>>()];
         let starts = [0, rate as usize];
-        let mut together = vec![0.0; starts.len() * WINDOW_VALUES];
-        transform.write_windows(&channels, &starts, &mut together);
-
-        let mut separately = vec![0.0; starts.len() * WINDOW_VALUES];
-        for (&start, output) in starts
+        let together = transform.write_windows(&channels, &starts);
+        let separately = starts
             .iter()
-            .zip(separately.chunks_exact_mut(WINDOW_VALUES))
-        {
-            transform.write_windows(&channels, &[start], output);
-        }
+            .flat_map(|&start| transform.write_windows(&channels, &[start]))
+            .collect::<Vec<_>>();
         assert_eq!(together, separately);
     }
 }

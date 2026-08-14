@@ -11,7 +11,6 @@ use ort::{
 use crate::spectrogram::{N_BINS, N_FRAMES, WINDOW_VALUES};
 
 const MODEL: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/model.onnx"));
-pub const DEFAULT_THRESHOLD: f32 = 0.4;
 pub const ENCODER_LABELS: [&str; 6] = ["mp3", "aac", "aac_at", "fdk_aac", "vorbis", "opus"];
 
 pub struct WindowScore {
