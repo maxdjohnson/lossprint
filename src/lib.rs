@@ -30,7 +30,7 @@ mod spectrogram;
 use anyhow::{anyhow, bail, Result as AnyResult};
 use model::{Model, WindowScore, CODEC_COUNT};
 use rayon::prelude::*;
-use spectrogram::{TransformCache, CROP_SECONDS, MAX_WINDOWS, WINDOW_VALUES};
+use spectrogram::{TransformCache, MAX_WINDOWS, WINDOW_VALUES};
 use std::fmt;
 use std::path::Path;
 use std::sync::mpsc::sync_channel;
@@ -115,11 +115,17 @@ pub struct CodecProbabilities {
     pub vorbis: f32,
     /// Opus probability.
     pub opus: f32,
+    /// MP2 probability.
+    pub mp2: f32,
+    /// Windows Media Audio probability.
+    pub wma: f32,
+    /// Musepack probability.
+    pub musepack: f32,
 }
 
 impl CodecProbabilities {
     fn from_array(probabilities: [f32; CODEC_COUNT]) -> Self {
-        let [mp3, aac, aac_at, fdk_aac, vorbis, opus] = probabilities;
+        let [mp3, aac, aac_at, fdk_aac, vorbis, opus, mp2, wma, musepack] = probabilities;
         Self {
             mp3,
             aac,
@@ -127,11 +133,14 @@ impl CodecProbabilities {
             fdk_aac,
             vorbis,
             opus,
+            mp2,
+            wma,
+            musepack,
         }
     }
 }
 
-/// Model probabilities averaged across a track's analysis windows.
+/// Model probabilities pooled across a track's analysis windows.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TrackScore {
     /// The probability that this track is a lossy transcode.
@@ -157,8 +166,8 @@ impl ScannerBuilder {
 
     /// Set the number of tracks represented in each model batch.
     ///
-    /// Valid values are 1 through [`MAX_BATCH_TRACKS`]. When unset, the
-    /// scanner selects a platform-appropriate value from the number of files.
+    /// Valid values are 1 through [`MAX_BATCH_TRACKS`]. When unset, scans of at
+    /// least 16 tracks use 8; smaller scans use 1.
     pub const fn batch_size(mut self, batch_size: u8) -> Self {
         self.batch_size = Some(batch_size);
         self
@@ -315,7 +324,7 @@ pub fn is_supported_file(path: impl AsRef<Path>) -> bool {
 }
 
 fn default_batch_size(files: usize) -> u8 {
-    if cfg!(all(target_os = "macos", target_arch = "aarch64")) && files >= 16 {
+    if files >= 16 {
         MAX_BATCH_TRACKS
     } else {
         1
@@ -324,10 +333,10 @@ fn default_batch_size(files: usize) -> u8 {
 
 fn prepare(path: &Path, transforms: &TransformCache) -> AnyResult<Vec<f32>> {
     let clip = audio::decode(path)?;
-    let crop_len = clip.sample_rate as usize * CROP_SECONDS;
+    let crop_len = clip.sample_rate as usize / 2;
     let offsets = spectrogram::window_offsets(clip.channels[0].len(), crop_len);
     if offsets.is_empty() {
-        bail!("audio is shorter than {CROP_SECONDS} seconds")
+        bail!("audio is shorter than 0.5 seconds")
     }
     let transform = transforms.get(clip.sample_rate)?;
     Ok(transform.write_windows(&clip.channels, &offsets))
@@ -336,16 +345,21 @@ fn prepare(path: &Path, transforms: &TransformCache) -> AnyResult<Vec<f32>> {
 #[derive(Default)]
 struct FileScore {
     error: Option<Error>,
-    transcode_sum: f32,
-    codec_sums: [f32; CODEC_COUNT],
+    transcode_logit_sum: f32,
+    codec_log_sums: [f32; CODEC_COUNT],
     windows: usize,
 }
 
 impl FileScore {
     fn add(&mut self, score: &WindowScore) {
-        self.transcode_sum += score.transcode_probability;
-        for (sum, probability) in self.codec_sums.iter_mut().zip(score.codec_probabilities) {
-            *sum += probability;
+        let probability = score.transcode_probability.clamp(1e-6, 1.0 - 1e-6);
+        self.transcode_logit_sum += probability.ln() - (-probability).ln_1p();
+        for (sum, probability) in self
+            .codec_log_sums
+            .iter_mut()
+            .zip(score.codec_probabilities)
+        {
+            *sum += probability.clamp(1e-6, 1.0).ln();
         }
         self.windows += 1;
     }
@@ -356,9 +370,16 @@ impl FileScore {
         }
         debug_assert!(self.windows > 0);
         let windows = self.windows as f32;
+        let mean_logit = self.transcode_logit_sum / windows;
+        let mean_logs = self.codec_log_sums.map(|sum| sum / windows);
+        let max_log = mean_logs.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        let geometric = mean_logs.map(|value| (value - max_log).exp());
+        let codec_total: f32 = geometric.iter().sum();
         Ok(TrackScore {
-            prob_transcode: self.transcode_sum / windows,
-            prob_codec: CodecProbabilities::from_array(self.codec_sums.map(|sum| sum / windows)),
+            prob_transcode: 1.0 / (1.0 + (-mean_logit).exp()),
+            prob_codec: CodecProbabilities::from_array(
+                geometric.map(|probability| probability / codec_total),
+            ),
         })
     }
 }
@@ -428,49 +449,52 @@ mod tests {
         let mut score = FileScore::default();
         score.add(&WindowScore {
             transcode_probability: 0.75,
-            codec_probabilities: [0.05, 0.1, 0.15, 0.2, 0.25, 0.25],
-        });
-
-        assert_eq!(
-            score.finish().unwrap(),
-            TrackScore {
-                prob_transcode: 0.75,
-                prob_codec: CodecProbabilities {
-                    mp3: 0.05,
-                    aac: 0.1,
-                    aac_at: 0.15,
-                    fdk_aac: 0.2,
-                    vorbis: 0.25,
-                    opus: 0.25,
-                },
-            }
-        );
-    }
-
-    #[test]
-    fn file_score_averages_probabilities_across_windows() {
-        let mut score = FileScore::default();
-        score.add(&WindowScore {
-            transcode_probability: 0.6,
-            codec_probabilities: [0.51, 0.49, 0.0, 0.0, 0.0, 0.0],
-        });
-        score.add(&WindowScore {
-            transcode_probability: 0.8,
-            codec_probabilities: [0.51, 0.49, 0.0, 0.0, 0.0, 0.0],
-        });
-        score.add(&WindowScore {
-            transcode_probability: 1.0,
-            codec_probabilities: [0.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+            codec_probabilities: [0.02, 0.04, 0.06, 0.08, 0.1, 0.12, 0.14, 0.16, 0.28],
         });
 
         let score = score.finish().unwrap();
-        assert!((score.prob_transcode - 0.8).abs() < f32::EPSILON);
-        assert!((score.prob_codec.mp3 - 0.34).abs() < f32::EPSILON);
-        assert!((score.prob_codec.aac - 0.66).abs() < f32::EPSILON);
-        assert_eq!(score.prob_codec.aac_at, 0.0);
-        assert_eq!(score.prob_codec.fdk_aac, 0.0);
-        assert_eq!(score.prob_codec.vorbis, 0.0);
-        assert_eq!(score.prob_codec.opus, 0.0);
+        assert!((score.prob_transcode - 0.75).abs() < 1e-6);
+        let actual = [
+            score.prob_codec.mp3,
+            score.prob_codec.aac,
+            score.prob_codec.aac_at,
+            score.prob_codec.fdk_aac,
+            score.prob_codec.vorbis,
+            score.prob_codec.opus,
+            score.prob_codec.mp2,
+            score.prob_codec.wma,
+            score.prob_codec.musepack,
+        ];
+        for (actual, expected) in actual
+            .into_iter()
+            .zip([0.02, 0.04, 0.06, 0.08, 0.1, 0.12, 0.14, 0.16, 0.28])
+        {
+            assert!((actual - expected).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn file_score_uses_geometric_probability_pooling() {
+        let mut score = FileScore::default();
+        score.add(&WindowScore {
+            transcode_probability: 0.2,
+            codec_probabilities: [0.9, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        });
+        score.add(&WindowScore {
+            transcode_probability: 0.8,
+            codec_probabilities: [0.4, 0.6, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        });
+
+        let score = score.finish().unwrap();
+        assert!((score.prob_transcode - 0.5).abs() < 1e-6);
+        let mp3 = 0.36_f32.sqrt();
+        let aac = 0.06_f32.sqrt();
+        let floor = 1e-6_f32;
+        let total = mp3 + aac + 7.0 * floor;
+        assert!((score.prob_codec.mp3 - mp3 / total).abs() < 1e-6);
+        assert!((score.prob_codec.aac - aac / total).abs() < 1e-6);
+        assert!((score.prob_codec.aac_at - floor / total).abs() < 1e-8);
+        assert!((score.prob_codec.musepack - floor / total).abs() < 1e-8);
     }
 
     #[test]

@@ -9,9 +9,10 @@ import tempfile
 from pathlib import Path
 
 EXPECTED = {
-    "musdb18-hq-1.wav": ("clean", "-"),
-    "musdb18-hq-1.mp3.wav": ("transcode", "mp3"),
+    "musdb18-hq-1.wav": (0.001858, "clean", "-"),
+    "musdb18-hq-1.mp3.wav": (0.984758, "transcode", "mp3"),
 }
+PROBABILITY_TOLERANCE = 5e-4
 
 
 def fail(message: str) -> None:
@@ -82,8 +83,15 @@ def assert_output(output: str, fixtures: Path) -> None:
             fail(f"duplicate fixture in output: {name!r}")
         if Path(fields[3]).resolve() != (fixtures / name).resolve():
             fail(f"unexpected fixture path: {fields[3]!r}")
+        expected_probability, expected_verdict, expected_codec = EXPECTED[name]
+        if abs(probability - expected_probability) > PROBABILITY_TOLERANCE:
+            fail(
+                f"unexpected probability for {name}: {probability:.7f}; "
+                f"expected {expected_probability:.7f} ± {PROBABILITY_TOLERANCE}"
+            )
         actual = (fields[1], fields[2])
-        if actual != EXPECTED[name]:
+        expected = (expected_verdict, expected_codec)
+        if actual != expected:
             fail(f"unexpected classification for {name}: {actual!r}")
         seen.add(name)
         names.append(name)
@@ -106,7 +114,7 @@ def assert_partial_failure(binary: Path, fixtures: Path) -> None:
     assert_output(result.stdout, fixtures)
     if str(short_file) not in result.stderr:
         fail("per-file diagnostic did not identify the short input")
-    if "audio is shorter than 2 seconds" not in result.stderr:
+    if "audio is shorter than 0.5 seconds" not in result.stderr:
         fail("per-file diagnostic did not explain the short input")
     if "could not scan 1 file(s)" not in result.stderr:
         fail("aggregate failure did not report one failed file")

@@ -62,15 +62,16 @@ fn main() -> lossprint::Result<()> {
 }
 ```
 
-`score.prob_codec` also has `aac_at`, `fdk_aac`, `vorbis`, and `opus` fields.
-These codec probabilities are conditional on the track being a transcode.
+`score.prob_codec` also has `aac_at`, `fdk_aac`, `vorbis`, `opus`, `mp2`, `wma`,
+and `musepack` fields. These probabilities are conditional on the track being a
+transcode.
 
 `Scanner::score_files` prepares files in parallel, batches model inference, and
 returns results in input order. A decoding error affects only that file's inner
 result; a shared worker or inference failure is returned by the outer result.
 Configure parallelism and batch size with `Scanner::builder()`.
 
-The default `bundled-model` feature downloads the pinned v0.5 model during the
+The default `bundled-model` feature downloads the pinned v0.6 model during the
 build, verifies its SHA-256 checksum, caches it under Cargo's home directory,
 and embeds it in the program. Runtime scoring therefore needs no network. To
 supply the model yourself and avoid that model download, disable default
@@ -79,7 +80,7 @@ features and construct the scanner with `Scanner::from_model_bytes` or
 
 ```toml
 [dependencies]
-lossprint = { version = "0.4", default-features = false }
+lossprint = { version = "0.5", default-features = false }
 ```
 
 The scanner requires mutable access while scoring. Put it behind your own lock
@@ -93,7 +94,7 @@ Install Rust 1.97.1 or newer and `curl`, then run:
 cargo build --release
 ```
 
-Set `LOSSPRINT_MODEL_PATH` to the published v0.5 ONNX file for an offline build:
+Set `LOSSPRINT_MODEL_PATH` to the published v0.6 ONNX file for an offline build:
 
 ```bash
 LOSSPRINT_MODEL_PATH=/absolute/path/model.onnx cargo build --release
@@ -120,16 +121,14 @@ lower it to favor recall.
 `--jobs 0`, the default, uses one worker per logical core. Set a smaller value
 to limit CPU and memory use.
 
-`--batch-size N` sends `N` tracks' worth of windows through the model per
-forward pass, where `N` is 1–8. It defaults to 1, except on Apple Silicon scans
-of at least 16 tracks, where it defaults to 8 for the best throughput on large
-libraries.
+`--batch-size N` sends `N` tracks' worth of windows through the CPU model per
+forward pass, where `N` is 1–8. Scans of at least 16 tracks default to 8;
+smaller scans default to 1.
 
 Directory scans accept `.wav`, `.aif`, `.aiff`, and `.flac`. WAV and
 AIFF must contain linear integer or floating-point PCM. Input must be mono or
-stereo, use a sample rate from 8 to 384 kHz, and be at least two seconds long.
-Rates that do not produce the model's 173 STFT frames are rejected.
+stereo, use a sample rate from 8 to 384 kHz, and be at least 0.5 seconds long.
 
-Only the first 20 seconds of each track are decoded. Scores can vary slightly
-between CPU, Core ML, and DirectML inference, so callers should apply their own
-threshold rather than comparing exact probability values across platforms.
+Only the first 20 seconds are decoded. The scanner scores up to sixteen evenly
+spaced 0.5-second windows and pools their probabilities geometrically. Inference
+uses the pure-Rust, CPU-only tract runtime on every platform.

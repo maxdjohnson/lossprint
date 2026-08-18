@@ -32,7 +32,7 @@ struct Args {
     #[arg(short, long, default_value_t = 0)]
     jobs: usize,
 
-    /// Tracks' worth of windows per model forward pass (1-8); defaults to 1, or 8 on Apple Silicon with at least 16 tracks.
+    /// Tracks' worth of windows per model forward pass (1-8); defaults to 8 for scans of at least 16 tracks.
     #[arg(
         long,
         value_name = "TRACKS",
@@ -101,6 +101,9 @@ fn most_likely_codec(probabilities: &CodecProbabilities) -> &'static str {
         ("fdk_aac", probabilities.fdk_aac),
         ("vorbis", probabilities.vorbis),
         ("opus", probabilities.opus),
+        ("mp2", probabilities.mp2),
+        ("wma", probabilities.wma),
+        ("musepack", probabilities.musepack),
     ];
     let mut best = candidates[0];
     for candidate in candidates.into_iter().skip(1) {
@@ -146,8 +149,8 @@ mod tests {
         }
     }
 
-    fn codecs(values: [f32; 6]) -> CodecProbabilities {
-        let [mp3, aac, aac_at, fdk_aac, vorbis, opus] = values;
+    fn codecs(values: [f32; 9]) -> CodecProbabilities {
+        let [mp3, aac, aac_at, fdk_aac, vorbis, opus, mp2, wma, musepack] = values;
         CodecProbabilities {
             mp3,
             aac,
@@ -155,6 +158,9 @@ mod tests {
             fdk_aac,
             vorbis,
             opus,
+            mp2,
+            wma,
+            musepack,
         }
     }
 
@@ -174,16 +180,16 @@ mod tests {
 
     #[test]
     fn classification_keeps_cli_threshold_and_codec_behavior() {
-        let clean = score(0.49, codecs([0.0, 0.0, 0.0, 1.0, 0.0, 0.0]));
+        let clean = score(0.49, codecs([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0]));
         assert_eq!(classification(&clean, DEFAULT_THRESHOLD), ("clean", "-"));
 
-        let transcode = score(0.5, codecs([0.1, 0.2, 0.3, 0.8, 0.4, 0.5]));
+        let transcode = score(0.5, codecs([0.1, 0.2, 0.3, 0.8, 0.4, 0.5, 0.6, 0.7, 0.9]));
         assert_eq!(
             classification(&transcode, DEFAULT_THRESHOLD),
-            ("transcode", "fdk_aac")
+            ("transcode", "musepack")
         );
 
-        let tie = score(0.9, codecs([0.4; 6]));
+        let tie = score(0.9, codecs([0.4; 9]));
         assert_eq!(
             classification(&tie, DEFAULT_THRESHOLD),
             ("transcode", "mp3")

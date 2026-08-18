@@ -11,6 +11,9 @@ fn score_is_plain_probability_data() {
             fdk_aac: 0.15,
             vorbis: 0.05,
             opus: 0.2,
+            mp2: 0.0,
+            wma: 0.0,
+            musepack: 0.0,
         },
     };
 
@@ -21,6 +24,9 @@ fn score_is_plain_probability_data() {
     assert_eq!(score.prob_codec.fdk_aac, 0.15);
     assert_eq!(score.prob_codec.vorbis, 0.05);
     assert_eq!(score.prob_codec.opus, 0.2);
+    assert_eq!(score.prob_codec.mp2, 0.0);
+    assert_eq!(score.prob_codec.wma, 0.0);
+    assert_eq!(score.prob_codec.musepack, 0.0);
 }
 
 #[test]

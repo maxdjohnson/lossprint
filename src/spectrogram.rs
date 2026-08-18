@@ -1,15 +1,14 @@
 //! Native-rate mid/side log-magnitude spectrograms.
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use rustfft::{num_complex::Complex32, Fft, FftPlanner};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 pub const N_BINS: usize = 513;
-pub const N_FRAMES: usize = 173;
+pub const N_FRAMES: usize = 44;
 pub const WINDOW_VALUES: usize = 2 * N_BINS * N_FRAMES;
-pub const CROP_SECONDS: usize = 2;
-pub const MAX_WINDOWS: usize = 12;
+pub const MAX_WINDOWS: usize = 16;
 const LOG_FLOOR: f32 = -13.815_511; // ln(1e-6)
 
 #[derive(Default)]
@@ -44,13 +43,7 @@ impl Transform {
     pub(crate) fn new(sample_rate: u32) -> Result<Self> {
         let n_fft = fft_size(sample_rate);
         let hop = n_fft / 2;
-        let crop_len = sample_rate as usize * CROP_SECONDS;
-        let frames = crop_len / hop + 1;
-        if frames != N_FRAMES {
-            bail!(
-                "sample rate {sample_rate} Hz produces {frames} STFT frames; expected {N_FRAMES}"
-            );
-        }
+        let crop_len = sample_rate as usize / 2;
         let window = (0..n_fft)
             .map(|index| {
                 0.5_f32
@@ -67,7 +60,7 @@ impl Transform {
         })
     }
 
-    /// Return `[window, 2, 513, 173]` mid/side spectrograms in row-major order.
+    /// Return `[window, 2, 513, 44]` mid/side spectrograms in row-major order.
     pub(crate) fn write_windows(&self, channels: &[Vec<f32>], starts: &[usize]) -> Vec<f32> {
         let crop_len = self.crop_len;
         debug_assert!((1..=2).contains(&channels.len()));
@@ -129,8 +122,9 @@ impl Transform {
     {
         let padding = self.n_fft / 2;
         let bins = (self.n_fft / 2 + 1).min(N_BINS);
-        output[bins * N_FRAMES..].fill(LOG_FLOOR);
-        for frame in 0..N_FRAMES {
+        let frames = (self.crop_len / self.hop + 1).min(N_FRAMES);
+        output.fill(LOG_FLOOR);
+        for frame in 0..frames {
             let frame_start = frame * self.hop;
             for (offset, slot) in buffer.iter_mut().enumerate() {
                 let padded = frame_start + offset;
@@ -191,12 +185,14 @@ mod tests {
 
     #[test]
     fn twenty_seconds_uses_the_reference_windows() {
-        let offsets = window_offsets(20 * 44_100, 2 * 44_100);
+        let offsets = window_offsets(20 * 44_100, 44_100 / 2);
         let seconds = offsets
             .iter()
-            .map(|offset| offset / 44_100)
+            .map(|offset| *offset as f32 / 44_100.0)
             .collect::<Vec<_>>();
-        assert_eq!(seconds, vec![0, 1, 3, 4, 6, 8, 9, 11, 13, 14, 16, 18]);
+        assert_eq!(seconds.len(), 16);
+        assert_eq!(seconds[0], 0.0);
+        assert_eq!(seconds[15], 19.5);
     }
 
     #[test]
@@ -211,9 +207,11 @@ mod tests {
 
     #[test]
     fn mono_has_a_log_spectrogram_and_zero_side_plane() {
-        let rate = 32_000;
+        // 8,075 Hz naturally produces 43 STFT frames; the frontend pads the
+        // model's required 44th frame with the log floor.
+        let rate = 8_075;
         let transform = Transform::new(rate).unwrap();
-        let channels = vec![vec![0.0_f32; 2 * rate as usize]];
+        let channels = vec![vec![0.0_f32; rate as usize / 2]];
         let output = transform.write_windows(&channels, &[0]);
         assert!(output.iter().all(|value| (*value - LOG_FLOOR).abs() < 1e-6));
     }

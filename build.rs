@@ -6,9 +6,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const MODEL_URL: &str =
-    "https://huggingface.co/maxdj/lossprint/resolve/ae0526389bb0fa3d8cfed08ecfeae0bd7930a8c8/model.onnx?download=true";
-const MODEL_VERSION: &str = "v0.5";
-const MODEL_SHA256: &str = "950836de4cf5c9265aea8c7f9cf7b0d8c417b7c1780272f1c00a5d8039e83540";
+    "https://huggingface.co/maxdj/lossprint/resolve/14d46be97e6492c39e01a47aa4d549c2575176b1/model.onnx?download=true";
+const MODEL_VERSION: &str = "v0.6";
+const MODEL_SHA256: &str = "1ba4997ecc1cd3379767017abc32140f883c79e74c0d2b6c1ee6628fbd4549e4";
 
 fn install(source: &Path, destination: &Path) -> io::Result<()> {
     if destination.exists() {

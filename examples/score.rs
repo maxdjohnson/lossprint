@@ -15,5 +15,8 @@ fn main() -> lossprint::Result<()> {
     println!("fdk_aac\t{:.7}", score.prob_codec.fdk_aac);
     println!("vorbis\t{:.7}", score.prob_codec.vorbis);
     println!("opus\t{:.7}", score.prob_codec.opus);
+    println!("mp2\t{:.7}", score.prob_codec.mp2);
+    println!("wma\t{:.7}", score.prob_codec.wma);
+    println!("musepack\t{:.7}", score.prob_codec.musepack);
     Ok(())
 }
