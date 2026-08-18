@@ -13,13 +13,16 @@ pub const MAX_WINDOWS: usize = 12;
 const LOG_FLOOR: f32 = -13.815_511; // ln(1e-6)
 
 #[derive(Default)]
-pub struct TransformCache {
+pub(crate) struct TransformCache {
     transforms: Mutex<HashMap<u32, Arc<Transform>>>,
 }
 
 impl TransformCache {
-    pub fn get(&self, sample_rate: u32) -> Result<Arc<Transform>> {
-        let mut transforms = self.transforms.lock().unwrap();
+    pub(crate) fn get(&self, sample_rate: u32) -> Result<Arc<Transform>> {
+        let mut transforms = self
+            .transforms
+            .lock()
+            .map_err(|_| anyhow::anyhow!("spectrogram transform cache is unavailable"))?;
         if let Some(transform) = transforms.get(&sample_rate) {
             return Ok(Arc::clone(transform));
         }
@@ -29,7 +32,7 @@ impl TransformCache {
     }
 }
 
-pub struct Transform {
+pub(crate) struct Transform {
     n_fft: usize,
     hop: usize,
     crop_len: usize,
@@ -38,7 +41,7 @@ pub struct Transform {
 }
 
 impl Transform {
-    pub fn new(sample_rate: u32) -> Result<Self> {
+    pub(crate) fn new(sample_rate: u32) -> Result<Self> {
         let n_fft = fft_size(sample_rate);
         let hop = n_fft / 2;
         let crop_len = sample_rate as usize * CROP_SECONDS;
@@ -65,7 +68,7 @@ impl Transform {
     }
 
     /// Return `[window, 2, 513, 173]` mid/side spectrograms in row-major order.
-    pub fn write_windows(&self, channels: &[Vec<f32>], starts: &[usize]) -> Vec<f32> {
+    pub(crate) fn write_windows(&self, channels: &[Vec<f32>], starts: &[usize]) -> Vec<f32> {
         let crop_len = self.crop_len;
         debug_assert!((1..=2).contains(&channels.len()));
         debug_assert!(starts.iter().all(|&start| channels

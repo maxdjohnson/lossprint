@@ -1,20 +1,43 @@
 [package]
 name = "lossprint"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 rust-version = "1.97"
 description = "Detect lossy transcodes hiding in lossless audio collections"
 license = "MIT"
+readme = "README.md"
 repository = "https://github.com/maxdjohnson/lossprint"
+homepage = "https://github.com/maxdjohnson/lossprint"
+documentation = "https://docs.rs/lossprint"
+keywords = ["audio", "lossless", "transcode", "detection", "onnx"]
+categories = ["multimedia::audio", "command-line-utilities"]
+publish = ["crates-io"]
+
+[features]
+default = ["bundled-model", "cli"]
+bundled-model = []
+cli = ["dep:clap", "dep:walkdir"]
+
+[[bin]]
+name = "lossprint"
+path = "src/main.rs"
+required-features = ["bundled-model", "cli"]
+
+[[example]]
+name = "score"
+required-features = ["bundled-model"]
 
 [dependencies]
 anyhow = "1.0.104"
-clap = { version = "=4.6.6", features = ["derive"] }
+clap = { version = "=4.6.6", features = ["derive"], optional = true }
 ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "download-binaries", "tls-native", "api-27"] }
 rayon = "1.12"
 rustfft = "6.4"
 symphonia = { version = "=0.6.1", default-features = false, features = ["aiff", "flac", "pcm", "wav"] }
-walkdir = "2.5"
+walkdir = { version = "2.5", optional = true }
+
+[build-dependencies]
+sha2 = "0.10"
 
 [target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
 ort = { version = "=2.0.0-rc.13", default-features = false, features = ["coreml"] }
@@ -25,3 +48,8 @@ ort = { version = "=2.0.0-rc.13", default-features = false, features = ["copy-dy
 [profile.release]
 lto = "thin"
 strip = true
+
+[package.metadata.docs.rs]
+all-features = true
+default-target = "x86_64-unknown-linux-gnu"
+targets = []

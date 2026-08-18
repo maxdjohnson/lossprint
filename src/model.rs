@@ -4,23 +4,45 @@ use anyhow::{bail, Context, Result};
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 use ort::ep;
 use ort::{session::Session, value::TensorRef};
+use std::path::Path;
 
 use crate::spectrogram::{N_BINS, N_FRAMES, WINDOW_VALUES};
 
-const MODEL: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/model.onnx"));
-pub const ENCODER_LABELS: [&str; 6] = ["mp3", "aac", "aac_at", "fdk_aac", "vorbis", "opus"];
+pub(crate) const CODEC_COUNT: usize = 6;
 
-pub struct WindowScore {
+#[cfg(feature = "bundled-model")]
+const MODEL: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/model.onnx"));
+
+pub(crate) struct WindowScore {
     pub transcode_probability: f32,
-    pub encoder_probabilities: [f32; ENCODER_LABELS.len()],
+    pub codec_probabilities: [f32; CODEC_COUNT],
 }
 
-pub struct Model {
+pub(crate) struct Model {
     session: Session,
 }
 
 impl Model {
-    pub fn new() -> Result<Self> {
+    #[cfg(feature = "bundled-model")]
+    pub fn bundled() -> Result<Self> {
+        Self::from_bytes(MODEL)
+    }
+
+    pub fn from_bytes(model: &[u8]) -> Result<Self> {
+        let session = Self::builder()?
+            .commit_from_memory(model)
+            .context("could not prepare the ONNX model")?;
+        Ok(Self { session })
+    }
+
+    pub fn from_file(model: &Path) -> Result<Self> {
+        let session = Self::builder()?
+            .commit_from_file(model)
+            .with_context(|| format!("could not prepare ONNX model {}", model.display()))?;
+        Ok(Self { session })
+    }
+
+    fn builder() -> Result<ort::session::builder::SessionBuilder> {
         let mut builder = Session::builder().context("could not create inference session")?;
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
         {
@@ -35,10 +57,7 @@ impl Model {
                 .with_execution_providers([coreml])
                 .map_err(|error| anyhow::anyhow!("could not enable Core ML: {error}"))?;
         }
-        let session = builder
-            .commit_from_memory(MODEL)
-            .context("could not prepare the ONNX model")?;
-        Ok(Self { session })
+        Ok(builder)
     }
 
     pub fn run(&mut self, input: &[f32]) -> Result<Vec<WindowScore>> {
@@ -50,21 +69,25 @@ impl Model {
             .session
             .run(ort::inputs![tensor])
             .context("ONNX inference failed")?;
-        let transcode = outputs["transcode_probability"]
+        let transcode = outputs
+            .get("transcode_probability")
+            .context("model did not return transcode_probability")?
             .try_extract_tensor::<f32>()?
             .1;
-        let encoder = outputs["encoder_probability"]
+        let codecs = outputs
+            .get("encoder_probability")
+            .context("model did not return encoder_probability")?
             .try_extract_tensor::<f32>()?
             .1;
-        if transcode.len() != batch || encoder.len() != batch * ENCODER_LABELS.len() {
+        if transcode.len() != batch || codecs.len() != batch * CODEC_COUNT {
             bail!("model returned predictions with the wrong shape")
         }
         Ok(transcode
             .iter()
-            .zip(encoder.chunks_exact(ENCODER_LABELS.len()))
+            .zip(codecs.chunks_exact(CODEC_COUNT))
             .map(|(&transcode_probability, probabilities)| WindowScore {
                 transcode_probability,
-                encoder_probabilities: std::array::from_fn(|index| probabilities[index]),
+                codec_probabilities: std::array::from_fn(|index| probabilities[index]),
             })
             .collect())
     }

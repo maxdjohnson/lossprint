@@ -1,5 +1,12 @@
 # Third-party software
 
+## lossprint model
+
+The default build embeds the
+[lossprint v0.5 ONNX model](https://huggingface.co/maxdj/lossprint/tree/ae0526389bb0fa3d8cfed08ecfeae0bd7930a8c8),
+released under the MIT License. Its SHA-256 digest is
+`950836de4cf5c9265aea8c7f9cf7b0d8c417b7c1780272f1c00a5d8039e83540`.
+
 ## Symphonia
 
 `lossprint` statically links

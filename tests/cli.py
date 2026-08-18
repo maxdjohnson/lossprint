@@ -41,16 +41,19 @@ def download_fixtures(destination: Path) -> None:
         fail(f"fixture download exited with status {error.returncode}")
 
 
-def invoke(binary: Path, fixtures: Path) -> str:
+def invoke(binary: Path, arguments: list[str | Path], expected_status: int = 0) -> str:
     result = subprocess.run(
-        [binary, fixtures],
+        [binary, *arguments],
         capture_output=True,
         text=True,
     )
     sys.stdout.write(result.stdout)
     sys.stderr.write(result.stderr)
-    if result.returncode != 0:
-        fail(f"packaged binary exited with status {result.returncode}")
+    if result.returncode != expected_status:
+        fail(
+            f"packaged binary exited with status {result.returncode}; "
+            f"expected {expected_status}"
+        )
     return result.stdout
 
 
@@ -60,6 +63,7 @@ def assert_output(output: str, fixtures: Path) -> None:
         fail(f"expected {len(EXPECTED)} output rows, got {len(rows)}")
 
     seen = set()
+    names = []
     for row in rows:
         fields = row.split("\t")
         if len(fields) != 4:
@@ -82,6 +86,30 @@ def assert_output(output: str, fixtures: Path) -> None:
         if actual != EXPECTED[name]:
             fail(f"unexpected classification for {name}: {actual!r}")
         seen.add(name)
+        names.append(name)
+
+    if names != sorted(EXPECTED):
+        fail(f"output is not sorted by path: {names!r}")
+
+
+def assert_partial_failure(binary: Path, fixtures: Path) -> None:
+    short_file = Path(__file__).parent / "fixtures/audio/pcm16.wav"
+    result = subprocess.run(
+        [binary, fixtures, short_file],
+        capture_output=True,
+        text=True,
+    )
+    sys.stdout.write(result.stdout)
+    sys.stderr.write(result.stderr)
+    if result.returncode == 0:
+        fail("mixed valid/invalid scan unexpectedly succeeded")
+    assert_output(result.stdout, fixtures)
+    if str(short_file) not in result.stderr:
+        fail("per-file diagnostic did not identify the short input")
+    if "audio is shorter than 2 seconds" not in result.stderr:
+        fail("per-file diagnostic did not explain the short input")
+    if "could not scan 1 file(s)" not in result.stderr:
+        fail("aggregate failure did not report one failed file")
 
 
 def main() -> None:
@@ -95,7 +123,9 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix="lossprint-ci-") as directory:
         fixtures = Path(directory)
         download_fixtures(fixtures)
-        assert_output(invoke(binary, fixtures), fixtures)
+        assert_output(invoke(binary, [fixtures]), fixtures)
+        assert_output(invoke(binary, ["--batch-size", "8", fixtures]), fixtures)
+        assert_partial_failure(binary, fixtures)
 
 
 if __name__ == "__main__":
