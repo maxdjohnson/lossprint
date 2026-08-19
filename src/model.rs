@@ -1,8 +1,6 @@
 //! CPU-only ONNX inference through tract.
 
-use anyhow::{bail, Context, Result};
 use std::io::Cursor;
-use std::path::Path;
 use std::sync::Arc;
 use tract_onnx::prelude::*;
 
@@ -10,8 +8,57 @@ use crate::spectrogram::{N_BINS, N_FRAMES, WINDOW_VALUES};
 
 pub(crate) const CODEC_COUNT: usize = 9;
 
-#[cfg(feature = "bundled-model")]
 const MODEL: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/model.onnx"));
+
+/// A failure while loading the embedded model.
+#[derive(Debug, thiserror::Error)]
+pub enum InitializationError {
+    /// The embedded ONNX bytes could not be parsed.
+    #[error("could not parse the embedded ONNX model: {0}")]
+    Parse(#[source] Box<dyn std::error::Error + Send + Sync>),
+    /// The parsed model could not be optimized.
+    #[error("could not optimize the embedded ONNX model: {0}")]
+    Optimize(#[source] Box<dyn std::error::Error + Send + Sync>),
+    /// The optimized model could not be made runnable.
+    #[error("could not prepare the embedded ONNX model: {0}")]
+    Prepare(#[source] Box<dyn std::error::Error + Send + Sync>),
+}
+
+/// A failure while running the embedded model.
+#[derive(Debug, thiserror::Error)]
+pub enum InferenceError {
+    /// The inference runtime failed.
+    #[error("ONNX inference failed: {0}")]
+    Run(#[source] Box<dyn std::error::Error + Send + Sync>),
+    /// The fixed model returned the wrong number of output heads.
+    #[error("model returned {actual} outputs; expected 3")]
+    UnexpectedOutputCount {
+        /// Number of output heads returned by the model.
+        actual: usize,
+    },
+    /// The fixed model's transcode output is not float32.
+    #[error("model's transcode output is not float32")]
+    InvalidTranscodeOutputType,
+    /// The fixed model's codec output is not float32.
+    #[error("model's codec output is not float32")]
+    InvalidCodecOutputType,
+    /// The fixed model's codec output is not stored contiguously.
+    #[error("model's codec output is not contiguous")]
+    NonContiguousCodecOutput,
+    /// The fixed model returned the wrong number of predictions.
+    #[error(
+        "model returned the wrong output shape for {windows} windows: \
+         {transcode_values} transcode values and {codec_values} codec values"
+    )]
+    UnexpectedOutputShape {
+        /// Number of input windows.
+        windows: usize,
+        /// Number of returned transcode values.
+        transcode_values: usize,
+        /// Number of returned codec values.
+        codec_values: usize,
+    },
+}
 
 pub(crate) struct WindowScore {
     pub transcode_probability: f32,
@@ -23,61 +70,51 @@ pub(crate) struct Model {
 }
 
 impl Model {
-    #[cfg(feature = "bundled-model")]
-    pub fn bundled() -> Result<Self> {
-        Self::from_bytes(MODEL)
-    }
-
-    pub fn from_bytes(model: &[u8]) -> Result<Self> {
-        let mut cursor = Cursor::new(model);
+    pub(crate) fn new() -> Result<Self, InitializationError> {
+        let mut cursor = Cursor::new(MODEL);
         let model = tract_onnx::onnx()
             .model_for_read(&mut cursor)
-            .context("could not parse the ONNX model")?;
-        Self::prepare(model)
-    }
-
-    pub fn from_file(model: &Path) -> Result<Self> {
-        let model = tract_onnx::onnx()
-            .model_for_path(model)
-            .with_context(|| format!("could not parse ONNX model {}", model.display()))?;
-        Self::prepare(model)
-    }
-
-    fn prepare(model: InferenceModel) -> Result<Self> {
+            .map_err(|error| InitializationError::Parse(error.into_boxed_dyn_error()))?;
         let runnable = model
             .into_optimized()
-            .context("could not optimize the ONNX model")?
+            .map_err(|error| InitializationError::Optimize(error.into_boxed_dyn_error()))?
             .into_runnable()
-            .context("could not prepare the ONNX model")?;
+            .map_err(|error| InitializationError::Prepare(error.into_boxed_dyn_error()))?;
         Ok(Self { runnable })
     }
 
-    pub fn run(&mut self, input: &[f32]) -> Result<Vec<WindowScore>> {
+    pub(crate) fn run(&self, input: &[f32]) -> Result<Vec<WindowScore>, InferenceError> {
         debug_assert!(!input.is_empty());
         debug_assert!(input.len().is_multiple_of(WINDOW_VALUES));
         let batch = input.len() / WINDOW_VALUES;
         let input =
             tract_ndarray::Array4::from_shape_vec((batch, 2, N_BINS, N_FRAMES), input.to_vec())
-                .context("could not shape model input")?
+                .expect("window-aligned input fits the model shape")
                 .into_tensor();
         let outputs = self
             .runnable
             .run(tvec!(input.into()))
-            .context("ONNX inference failed")?;
+            .map_err(|error| InferenceError::Run(error.into_boxed_dyn_error()))?;
         if outputs.len() != 3 {
-            bail!("model returned {} outputs; expected 3", outputs.len())
+            return Err(InferenceError::UnexpectedOutputCount {
+                actual: outputs.len(),
+            });
         }
         let transcode = outputs[0]
             .to_plain_array_view::<f32>()
-            .context("transcode_probability is not float32")?;
+            .map_err(|_| InferenceError::InvalidTranscodeOutputType)?;
         let codecs = outputs[1]
             .to_plain_array_view::<f32>()
-            .context("encoder_probability is not float32")?;
+            .map_err(|_| InferenceError::InvalidCodecOutputType)?;
         let codecs = codecs
             .as_slice()
-            .context("encoder_probability is not contiguous")?;
+            .ok_or(InferenceError::NonContiguousCodecOutput)?;
         if transcode.len() != batch || codecs.len() != batch * CODEC_COUNT {
-            bail!("model returned predictions with the wrong shape")
+            return Err(InferenceError::UnexpectedOutputShape {
+                windows: batch,
+                transcode_values: transcode.len(),
+                codec_values: codecs.len(),
+            });
         }
         Ok(transcode
             .iter()

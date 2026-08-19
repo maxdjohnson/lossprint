@@ -6,17 +6,11 @@ fn main() -> lossprint::Result<()> {
         return Ok(());
     };
 
-    let mut scanner = Scanner::new()?;
+    let scanner = Scanner::new()?;
     let score = scanner.score_file(path)?;
-    println!("transcode\t{:.7}", score.prob_transcode);
-    println!("mp3\t{:.7}", score.prob_codec.mp3);
-    println!("aac\t{:.7}", score.prob_codec.aac);
-    println!("aac_at\t{:.7}", score.prob_codec.aac_at);
-    println!("fdk_aac\t{:.7}", score.prob_codec.fdk_aac);
-    println!("vorbis\t{:.7}", score.prob_codec.vorbis);
-    println!("opus\t{:.7}", score.prob_codec.opus);
-    println!("mp2\t{:.7}", score.prob_codec.mp2);
-    println!("wma\t{:.7}", score.prob_codec.wma);
-    println!("musepack\t{:.7}", score.prob_codec.musepack);
+    println!("transcode\t{:.7}", score.transcode_probability());
+    for (codec, probability) in score.codec_probabilities().iter() {
+        println!("{}\t{probability:.7}", codec.as_str());
+    }
     Ok(())
 }

@@ -1,11 +1,11 @@
 //! Native-rate decoding for lossless containers.
 
-use anyhow::{bail, Context, Result};
 use std::fs::File;
 use std::path::Path;
 use symphonia::core::audio::GenericAudioBufferRef;
 use symphonia::core::codecs::audio::well_known::{CODEC_ID_PCM_ALAW, CODEC_ID_PCM_MULAW};
 use symphonia::core::codecs::audio::AudioDecoderOptions;
+use symphonia::core::errors::Error as SymphoniaError;
 use symphonia::core::formats::TrackType;
 use symphonia::core::io::MediaSourceStream;
 use symphonia::default::{get_codecs, get_probe};
@@ -15,12 +15,58 @@ const MAX_SECONDS: usize = 20;
 const MIN_SAMPLE_RATE: u32 = 8_000;
 const MAX_SAMPLE_RATE: u32 = 384_000;
 
-pub struct Clip {
-    pub channels: Vec<Vec<f32>>,
-    pub sample_rate: u32,
+/// A failure while decoding or validating an input audio file.
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    /// The file could not be opened.
+    #[error("could not open file: {0}")]
+    Open(#[source] std::io::Error),
+    /// Symphonia could not recognize the container.
+    #[error("could not recognize audio format: {0}")]
+    Probe(#[source] SymphoniaError),
+    /// The container has no usable audio track.
+    #[error("audio file has no usable audio track")]
+    NoAudioTrack,
+    /// The track uses companded rather than linear PCM.
+    #[error("A-law and mu-law audio are not lossless PCM")]
+    LossyPcm,
+    /// The audio track does not declare a sample rate.
+    #[error("audio track has no sample rate")]
+    MissingSampleRate,
+    /// The sample rate is outside the model's supported range.
+    #[error(
+        "{0} Hz sample rate is outside the supported {MIN_SAMPLE_RATE}-{MAX_SAMPLE_RATE} Hz range"
+    )]
+    UnsupportedSampleRate(u32),
+    /// The audio track does not declare a channel layout.
+    #[error("audio track has no channel layout")]
+    MissingChannelLayout,
+    /// The track is neither mono nor stereo.
+    #[error("{0} channels; only mono and stereo are supported")]
+    UnsupportedChannelCount(usize),
+    /// Symphonia could not construct the decoder.
+    #[error("could not create audio decoder: {0}")]
+    CreateDecoder(#[source] SymphoniaError),
+    /// The next encoded packet could not be read.
+    #[error("could not read audio packet: {0}")]
+    ReadPacket(#[source] SymphoniaError),
+    /// An encoded packet could not be decoded.
+    #[error("could not decode audio packet: {0}")]
+    DecodePacket(#[source] SymphoniaError),
+    /// The track contains no decoded samples.
+    #[error("audio track contains no decodable samples")]
+    NoSamples,
+    /// The track cannot fill one analysis window.
+    #[error("audio is shorter than 0.5 seconds")]
+    TooShort,
 }
 
-pub fn is_supported(path: &Path) -> bool {
+pub(crate) struct Clip {
+    pub(crate) channels: Vec<Vec<f32>>,
+    pub(crate) sample_rate: u32,
+}
+
+pub(crate) fn has_supported_extension(path: &Path) -> bool {
     path.extension()
         .and_then(|value| value.to_str())
         .is_some_and(|extension| {
@@ -31,8 +77,8 @@ pub fn is_supported(path: &Path) -> bool {
 }
 
 /// Decode at most 20 seconds without resampling, downmixing, or requantizing.
-pub fn decode(path: &Path) -> Result<Clip> {
-    let file = File::open(path).context("could not open file")?;
+pub(crate) fn decode(path: &Path) -> Result<Clip, Error> {
+    let file = File::open(path).map_err(Error::Open)?;
     let stream = MediaSourceStream::new(Box::new(file), Default::default());
 
     let mut format = get_probe()
@@ -42,30 +88,26 @@ pub fn decode(path: &Path) -> Result<Clip> {
             Default::default(),
             Default::default(),
         )
-        .context("could not recognize audio format")?;
+        .map_err(Error::Probe)?;
     let codec = format
         .default_track(TrackType::Audio)
         .and_then(|track| track.codec_params.as_ref())
         .and_then(|params| params.audio())
-        .context("audio file has no usable audio track")?;
+        .ok_or(Error::NoAudioTrack)?;
     if codec.codec == CODEC_ID_PCM_ALAW || codec.codec == CODEC_ID_PCM_MULAW {
-        bail!("A-law and mu-law audio are not lossless PCM")
+        return Err(Error::LossyPcm);
     }
-    let sample_rate = codec
-        .sample_rate
-        .context("audio track has no sample rate")?;
+    let sample_rate = codec.sample_rate.ok_or(Error::MissingSampleRate)?;
     if !(MIN_SAMPLE_RATE..=MAX_SAMPLE_RATE).contains(&sample_rate) {
-        bail!(
-            "{sample_rate} Hz sample rate is outside the supported {MIN_SAMPLE_RATE}-{MAX_SAMPLE_RATE} Hz range"
-        )
+        return Err(Error::UnsupportedSampleRate(sample_rate));
     }
     let channel_count = codec
         .channels
         .as_ref()
-        .context("audio track has no channel layout")?
+        .ok_or(Error::MissingChannelLayout)?
         .count();
     if !(1..=2).contains(&channel_count) {
-        bail!("{channel_count} channels; only mono and stereo are supported")
+        return Err(Error::UnsupportedChannelCount(channel_count));
     }
     let wanted_frames = MAX_SECONDS * sample_rate as usize;
     let mut channels = (0..channel_count)
@@ -73,15 +115,10 @@ pub fn decode(path: &Path) -> Result<Clip> {
         .collect::<Vec<_>>();
     let mut decoder = get_codecs()
         .make_audio_decoder(codec, &AudioDecoderOptions::default())
-        .context("could not create audio decoder")?;
+        .map_err(Error::CreateDecoder)?;
 
-    while let Some(packet) = format
-        .next_packet()
-        .context("could not read audio packet")?
-    {
-        let decoded = decoder
-            .decode(&packet)
-            .context("could not decode audio packet")?;
+    while let Some(packet) = format.next_packet().map_err(Error::ReadPacket)? {
+        let decoded = decoder.decode(&packet).map_err(Error::DecodePacket)?;
         debug_assert_eq!(decoded.spec().rate(), sample_rate);
         debug_assert_eq!(decoded.spec().channels().count(), channel_count);
         append(decoded, &mut channels);
@@ -91,7 +128,7 @@ pub fn decode(path: &Path) -> Result<Clip> {
     }
 
     if channels[0].is_empty() {
-        bail!("audio track contains no decodable samples")
+        return Err(Error::NoSamples);
     }
     for channel in &mut channels {
         channel.truncate(wanted_frames);

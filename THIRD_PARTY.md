@@ -2,7 +2,7 @@
 
 ## lossprint model
 
-The default build embeds the
+The build embeds the
 [lossprint v0.6 ONNX model](https://huggingface.co/maxdj/lossprint/tree/v0.6),
 released under the MIT License. Its SHA-256 digest is
 `1ba4997ecc1cd3379767017abc32140f883c79e74c0d2b6c1ee6628fbd4549e4`.

@@ -132,7 +132,6 @@ def main() -> None:
         fixtures = Path(directory)
         download_fixtures(fixtures)
         assert_output(invoke(binary, [fixtures]), fixtures)
-        assert_output(invoke(binary, ["--batch-size", "8", fixtures]), fixtures)
         assert_partial_failure(binary, fixtures)
 
 

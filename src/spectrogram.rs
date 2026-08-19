@@ -1,14 +1,13 @@
 //! Native-rate mid/side log-magnitude spectrograms.
 
-use anyhow::Result;
 use rustfft::{num_complex::Complex32, Fft, FftPlanner};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-pub const N_BINS: usize = 513;
-pub const N_FRAMES: usize = 44;
-pub const WINDOW_VALUES: usize = 2 * N_BINS * N_FRAMES;
-pub const MAX_WINDOWS: usize = 16;
+pub(crate) const N_BINS: usize = 513;
+pub(crate) const N_FRAMES: usize = 44;
+pub(crate) const WINDOW_VALUES: usize = 2 * N_BINS * N_FRAMES;
+const MAX_WINDOWS: usize = 16;
 const LOG_FLOOR: f32 = -13.815_511; // ln(1e-6)
 
 #[derive(Default)]
@@ -17,17 +16,17 @@ pub(crate) struct TransformCache {
 }
 
 impl TransformCache {
-    pub(crate) fn get(&self, sample_rate: u32) -> Result<Arc<Transform>> {
+    pub(crate) fn get(&self, sample_rate: u32) -> Arc<Transform> {
         let mut transforms = self
             .transforms
             .lock()
-            .map_err(|_| anyhow::anyhow!("spectrogram transform cache is unavailable"))?;
+            .expect("transform cache mutex poisoned");
         if let Some(transform) = transforms.get(&sample_rate) {
-            return Ok(Arc::clone(transform));
+            return Arc::clone(transform);
         }
-        let transform = Arc::new(Transform::new(sample_rate)?);
+        let transform = Arc::new(Transform::new(sample_rate));
         transforms.insert(sample_rate, Arc::clone(&transform));
-        Ok(transform)
+        transform
     }
 }
 
@@ -40,7 +39,7 @@ pub(crate) struct Transform {
 }
 
 impl Transform {
-    pub(crate) fn new(sample_rate: u32) -> Result<Self> {
+    pub(crate) fn new(sample_rate: u32) -> Self {
         let n_fft = fft_size(sample_rate);
         let hop = n_fft / 2;
         let crop_len = sample_rate as usize / 2;
@@ -51,13 +50,13 @@ impl Transform {
             })
             .collect();
         let fft = FftPlanner::new().plan_fft_forward(n_fft);
-        Ok(Self {
+        Self {
             n_fft,
             hop,
             crop_len,
             window,
             fft,
-        })
+        }
     }
 
     /// Return `[window, 2, 513, 44]` mid/side spectrograms in row-major order.
@@ -140,11 +139,11 @@ impl Transform {
 }
 
 /// Scale the FFT size to preserve the model's 44.1 kHz bin spacing.
-pub fn fft_size(sample_rate: u32) -> usize {
+fn fft_size(sample_rate: u32) -> usize {
     ((u64::from(sample_rate) * 1024 + 22_050) / 44_100) as usize
 }
 
-pub fn window_offsets(total_frames: usize, crop_len: usize) -> Vec<usize> {
+pub(crate) fn window_offsets(total_frames: usize, crop_len: usize) -> Vec<usize> {
     if total_frames < crop_len {
         return Vec::new();
     }
@@ -210,7 +209,7 @@ mod tests {
         // 8,075 Hz naturally produces 43 STFT frames; the frontend pads the
         // model's required 44th frame with the log floor.
         let rate = 8_075;
-        let transform = Transform::new(rate).unwrap();
+        let transform = Transform::new(rate);
         let channels = vec![vec![0.0_f32; rate as usize / 2]];
         let output = transform.write_windows(&channels, &[0]);
         assert!(output.iter().all(|value| (*value - LOG_FLOOR).abs() < 1e-6));
@@ -219,7 +218,7 @@ mod tests {
     #[test]
     fn shared_fft_storage_preserves_each_window() {
         let rate = 8_000;
-        let transform = Transform::new(rate).unwrap();
+        let transform = Transform::new(rate);
         let channels = vec![(0..3 * rate as usize)
             .map(|index| (index % 97) as f32 / 97.0)
             .collect::<Vec<_>>()];

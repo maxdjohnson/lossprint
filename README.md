@@ -43,18 +43,20 @@ Keep a `Scanner` alive while processing multiple tracks so its model, worker
 pool, and spectrogram transforms are reused.
 
 ```rust,no_run
-use lossprint::Scanner;
+use lossprint::{Codec, Scanner};
 
 fn main() -> lossprint::Result<()> {
-    let mut scanner = Scanner::new()?;
+    let scanner = Scanner::new()?;
     let score = scanner.score_file("track.flac")?;
 
-    println!("P(transcode) = {:.3}", score.prob_transcode);
-    println!("P(mp3 | transcode) = {:.3}", score.prob_codec.mp3);
-    println!("P(aac | transcode) = {:.3}", score.prob_codec.aac);
+    println!("P(transcode) = {:.3}", score.transcode_probability());
+    println!(
+        "P(mp3 | transcode) = {:.3}",
+        score.codec_probabilities().probability(Codec::Mp3),
+    );
 
     // The library returns probabilities; the application chooses its threshold.
-    if score.prob_transcode >= 0.5 {
+    if score.transcode_probability() >= 0.5 {
         println!("transcode");
     }
 
@@ -62,29 +64,21 @@ fn main() -> lossprint::Result<()> {
 }
 ```
 
-`score.prob_codec` also has `aac_at`, `fdk_aac`, `vorbis`, `opus`, `mp2`, `wma`,
-and `musepack` fields. These probabilities are conditional on the track being a
+`Codec` covers all nine codec and encoder classes. Use
+`score.codec_probabilities().iter()` to visit each class and probability in
+model order. These probabilities are conditional on the track being a
 transcode.
 
-`Scanner::score_files` prepares files in parallel, batches model inference, and
-returns results in input order. A decoding error affects only that file's inner
-result; a shared worker or inference failure is returned by the outer result.
-Configure parallelism and batch size with `Scanner::builder()`.
+`Scanner::score_files` prepares files in parallel and returns results in input
+order. Each track's analysis windows are scored together in one model call. A
+decoding or input error affects only that file's inner result; an inference
+failure is returned by the outer result. Configure parallelism with
+`Scanner::builder()`.
 
-The default `bundled-model` feature downloads the pinned v0.6 model during the
-build, verifies its SHA-256 checksum, caches it under Cargo's home directory,
-and embeds it in the program. Runtime scoring therefore needs no network. To
-supply the model yourself and avoid that model download, disable default
-features and construct the scanner with `Scanner::from_model_bytes` or
-`Scanner::from_model_file`:
-
-```toml
-[dependencies]
-lossprint = { version = "0.5", default-features = false }
-```
-
-The scanner requires mutable access while scoring. Put it behind your own lock
-if several threads need to share one instance.
+The build downloads the pinned v0.6 model, verifies its SHA-256 checksum,
+caches it under Cargo's home directory, and embeds it in the program. Runtime
+scoring therefore needs no network. A scanner can be shared across threads;
+scoring only requires `&Scanner`.
 
 ## Build
 
@@ -93,15 +87,6 @@ Install Rust 1.97.1 or newer and `curl`, then run:
 ```bash
 cargo build --release
 ```
-
-Set `LOSSPRINT_MODEL_PATH` to the published v0.6 ONNX file for an offline build:
-
-```bash
-LOSSPRINT_MODEL_PATH=/absolute/path/model.onnx cargo build --release
-```
-
-The supplied path is intentionally not checksum-restricted, which permits
-applications to test compatible custom models.
 
 ## Use
 
@@ -112,7 +97,6 @@ not follow symlinks.
 lossprint ~/Music /Volumes/archive
 lossprint --threshold 0.7 ~/Music
 lossprint --jobs 4 ~/Music
-lossprint --batch-size 4 ~/Music
 ```
 
 The CLI's default threshold is `0.5`. Raise it to reduce false positives, or
@@ -121,14 +105,11 @@ lower it to favor recall.
 `--jobs 0`, the default, uses one worker per logical core. Set a smaller value
 to limit CPU and memory use.
 
-`--batch-size N` sends `N` tracks' worth of windows through the CPU model per
-forward pass, where `N` is 1–8. Scans of at least 16 tracks default to 8;
-smaller scans default to 1.
-
 Directory scans accept `.wav`, `.aif`, `.aiff`, and `.flac`. WAV and
 AIFF must contain linear integer or floating-point PCM. Input must be mono or
 stereo, use a sample rate from 8 to 384 kHz, and be at least 0.5 seconds long.
 
 Only the first 20 seconds are decoded. The scanner scores up to sixteen evenly
-spaced 0.5-second windows and pools their probabilities geometrically. Inference
-uses the pure-Rust, CPU-only tract runtime on every platform.
+spaced 0.5-second windows in one model call and pools their probabilities
+geometrically. Inference uses the pure-Rust, CPU-only tract runtime on every
+platform.

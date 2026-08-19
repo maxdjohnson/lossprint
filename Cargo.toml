@@ -14,25 +14,21 @@ categories = ["multimedia::audio", "command-line-utilities"]
 publish = ["crates-io"]
 
 [features]
-default = ["bundled-model", "cli"]
-bundled-model = []
-cli = ["dep:clap", "dep:walkdir"]
+default = ["cli"]
+cli = ["dep:anyhow", "dep:clap", "dep:walkdir"]
 
 [[bin]]
 name = "lossprint"
 path = "src/main.rs"
-required-features = ["bundled-model", "cli"]
-
-[[example]]
-name = "score"
-required-features = ["bundled-model"]
+required-features = ["cli"]
 
 [dependencies]
-anyhow = "1.0.104"
+anyhow = { version = "1.0.104", optional = true }
 clap = { version = "=4.6.6", features = ["derive"], optional = true }
 rayon = "1.12"
 rustfft = "6.4"
 symphonia = { version = "=0.6.1", default-features = false, features = ["aiff", "flac", "pcm", "wav"] }
+thiserror = "2.0"
 tract-onnx = { version = "=0.23.4", default-features = false }
 walkdir = { version = "2.5", optional = true }
 

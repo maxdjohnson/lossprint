@@ -10,14 +10,6 @@ const MODEL_URL: &str =
 const MODEL_VERSION: &str = "v0.6";
 const MODEL_SHA256: &str = "1ba4997ecc1cd3379767017abc32140f883c79e74c0d2b6c1ee6628fbd4549e4";
 
-fn install(source: &Path, destination: &Path) -> io::Result<()> {
-    if destination.exists() {
-        fs::remove_file(destination)?;
-    }
-    fs::copy(source, destination)?;
-    Ok(())
-}
-
 fn cache_path() -> PathBuf {
     let cargo_home = env::var_os("CARGO_HOME")
         .map(PathBuf::from)
@@ -96,34 +88,19 @@ fn verify(path: &Path) -> io::Result<()> {
 }
 
 fn main() -> io::Result<()> {
-    println!("cargo:rerun-if-env-changed=LOSSPRINT_MODEL_PATH");
     println!("cargo:rerun-if-env-changed=DOCS_RS");
-
-    if env::var_os("CARGO_FEATURE_BUNDLED_MODEL").is_none() {
-        return Ok(());
-    }
 
     let destination =
         PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR is set")).join("model.onnx");
     if env::var_os("DOCS_RS").is_some() {
-        if destination.exists() {
-            fs::remove_file(&destination)?;
-        }
         fs::write(destination, [])?;
         return Ok(());
     }
-    if let Some(source) = env::var_os("LOSSPRINT_MODEL_PATH") {
-        let source = PathBuf::from(source);
-        println!("cargo:rerun-if-changed={}", source.display());
-        install(&source, &destination)?;
-        return Ok(());
-    }
-
     let cached = cache_path();
     if !cached.exists() {
         download(&cached)?;
     }
     verify(&cached)?;
-    install(&cached, &destination)?;
+    fs::copy(cached, destination)?;
     Ok(())
 }
