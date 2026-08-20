@@ -88,6 +88,7 @@ fn verify(path: &Path) -> io::Result<()> {
 }
 
 fn main() -> io::Result<()> {
+    println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=DOCS_RS");
 
     let destination =

@@ -4,6 +4,7 @@ use rustfft::{num_complex::Complex32, Fft, FftPlanner};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+pub(crate) const WINDOW_SECONDS: f32 = 0.5;
 pub(crate) const N_BINS: usize = 513;
 pub(crate) const N_FRAMES: usize = 44;
 pub(crate) const WINDOW_VALUES: usize = 2 * N_BINS * N_FRAMES;
@@ -39,7 +40,7 @@ pub(crate) struct Transform {
 impl Transform {
     pub(crate) fn new(sample_rate: u32) -> Self {
         let n_fft = fft_size(sample_rate);
-        let crop_len = sample_rate as usize / 2;
+        let crop_len = window_len(sample_rate);
         let window = (0..n_fft)
             .map(|index| {
                 0.5_f32
@@ -55,7 +56,7 @@ impl Transform {
     }
 
     /// Return `[window, 2, 513, 44]` mid/side spectrograms in row-major order.
-    pub(crate) fn write_windows(&self, channels: &[Vec<f32>], starts: &[usize]) -> Vec<f32> {
+    pub(crate) fn write_windows(&self, channels: &[&[f32]], starts: &[usize]) -> Vec<f32> {
         let crop_len = self.crop_len;
         debug_assert!((1..=2).contains(&channels.len()));
         debug_assert!(starts.iter().all(|&start| channels
@@ -73,7 +74,7 @@ impl Transform {
 
     fn write_window(
         &self,
-        channels: &[Vec<f32>],
+        channels: &[&[f32]],
         start: usize,
         output: &mut [f32],
         buffer: &mut [Complex32],
@@ -137,6 +138,11 @@ fn fft_size(sample_rate: u32) -> usize {
     ((u64::from(sample_rate) * 1024 + 22_050) / 44_100) as usize
 }
 
+/// The analysis window is [`WINDOW_SECONDS`] long at any sample rate.
+pub(crate) fn window_len(sample_rate: u32) -> usize {
+    sample_rate as usize / 2
+}
+
 pub(crate) fn window_offsets(total_frames: usize, crop_len: usize) -> Vec<usize> {
     if total_frames < crop_len {
         return Vec::new();
@@ -178,7 +184,7 @@ mod tests {
 
     #[test]
     fn twenty_seconds_uses_the_reference_windows() {
-        let offsets = window_offsets(20 * 44_100, 44_100 / 2);
+        let offsets = window_offsets(20 * 44_100, window_len(44_100));
         let seconds = offsets
             .iter()
             .map(|offset| *offset as f32 / 44_100.0)
@@ -204,8 +210,8 @@ mod tests {
         // model's required 44th frame with the log floor.
         let rate = 8_075;
         let transform = Transform::new(rate);
-        let channels = vec![vec![0.0_f32; rate as usize / 2]];
-        let output = transform.write_windows(&channels, &[0]);
+        let channel = vec![0.0_f32; window_len(rate)];
+        let output = transform.write_windows(&[&channel], &[0]);
         assert!(output.iter().all(|value| (*value - LOG_FLOOR).abs() < 1e-6));
     }
 
@@ -213,9 +219,10 @@ mod tests {
     fn shared_fft_storage_preserves_each_window() {
         let rate = 8_000;
         let transform = Transform::new(rate);
-        let channels = vec![(0..3 * rate as usize)
+        let channel = (0..3 * rate as usize)
             .map(|index| (index % 97) as f32 / 97.0)
-            .collect::<Vec<_>>()];
+            .collect::<Vec<_>>();
+        let channels = [channel.as_slice()];
         let starts = [0, rate as usize];
         let together = transform.write_windows(&channels, &starts);
         let separately = starts

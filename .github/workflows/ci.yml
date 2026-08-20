@@ -54,8 +54,10 @@ jobs:
         with:
           package: lossprint
           feature-group: only-explicit-features
-          # The next release intentionally removes the unused v0.6 umbrella errors.
-          # Restore `minor` after publishing that breaking release.
+          # The 1.0 release intentionally reshapes the error types, relaxes
+          # `MediaSource`, and makes the `audio` module private.
+          # Restore `minor` immediately after publishing 1.0, or this guard
+          # permits silent breakage for the whole 1.x line.
           release-type: major
 
   build:
@@ -99,7 +101,7 @@ jobs:
           archive="dist/lossprint-${release_prefix}${TARGET}.tar.gz"
           mkdir -p "dist/${base}"
           install -m 755 "target/${TARGET}/release/lossprint" "dist/${base}/lossprint"
-          install -m 644 README.md LICENSE THIRD_PARTY.md "dist/${base}/"
+          install -m 644 README.md LICENSE THIRD_PARTY.md Cargo.lock "dist/${base}/"
           tar -C dist -czf "${archive}" "${base}"
           echo "ARCHIVE_PATH=${archive}" >> "${GITHUB_ENV}"
       - name: Package Windows release artifact
@@ -116,7 +118,7 @@ jobs:
           $stage = "dist/$base"
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
           Copy-Item "target/$env:TARGET/release/lossprint.exe" "$stage/lossprint.exe"
-          Copy-Item README.md, LICENSE, THIRD_PARTY.md -Destination $stage
+          Copy-Item README.md, LICENSE, THIRD_PARTY.md, Cargo.lock -Destination $stage
           Compress-Archive -LiteralPath $stage -DestinationPath $archive
           "ARCHIVE_PATH=$archive" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Extract packaged Unix artifact

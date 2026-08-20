@@ -19,8 +19,7 @@ const SUPPORTED_EXTENSIONS: [&str; 4] = ["aif", "aiff", "flac", "wav"];
     after_help = "Scans WAV, AIFF, and FLAC files. The default output is an aligned\n\
                   table; use -o jsonl for machine-readable output. Raise --threshold\n\
                   to reduce false positives; lower it to favor recall.\n\n\
-                  Includes Symphonia 0.6.1 under MPL-2.0; source:\n\
-                  https://github.com/pdeljanov/Symphonia/tree/v0.6.1"
+                  Includes Symphonia under MPL-2.0."
 )]
 struct Args {
     /// Audio files or directories to scan recursively.

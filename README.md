@@ -113,18 +113,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 `Scanner::score` accepts any seekable `MediaSource`, including `File`, `Cursor`,
-and other `Read + Seek + Send + Sync` types. The caller opens the source, so
-file-opening errors remain outside lossprint's scoring API. Read or seek
-failures after scoring starts are reported as audio errors.
-
-`Scanner::new` reports model initialization failures. `Scanner::score`
-distinguishes input and decoding failures (`ScoreError::Audio`) from model
-runtime failures (`ScoreError::Inference`).
-
-`Encoder` covers all nine encoder classes and implements `Display`. Use
-`score.encoder_probabilities()` to visit each class and probability. Iteration
-order is unspecified and may change with the model. These probabilities are
-conditional on the track being a transcode.
+and other `Read + Seek + Send` types. If you already hold decoded PCM, skip the
+decoder with `Scanner::score_samples`, which takes one planar slice per channel.
 
 A scanner can be shared across threads, so applications control track-level
 concurrency themselves.

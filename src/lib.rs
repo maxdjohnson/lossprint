@@ -23,58 +23,100 @@
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! Callers holding decoded PCM already can skip the decoder entirely with
+//! [`Scanner::score_samples`].
 
-pub mod audio;
+mod audio;
 mod model;
 mod spectrogram;
 
+use audio::{MAX_SAMPLE_RATE, MAX_SECONDS, MIN_SAMPLE_RATE};
 use model::{Model, WindowScore, ENCODER_COUNT};
-use spectrogram::TransformCache;
+use spectrogram::{TransformCache, WINDOW_SECONDS};
 use std::fmt;
+use std::str::FromStr;
 use tract_onnx::prelude::TractError;
 
 pub use audio::MediaSource;
 
+/// A failure reported by the model runtime.
 #[derive(Debug)]
-struct ModelFailure(TractError);
+pub struct ModelError(TractError);
 
-impl fmt::Display for ModelFailure {
+impl fmt::Display for ModelError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "{:#}", self.0)
     }
 }
 
-impl std::error::Error for ModelFailure {
+impl std::error::Error for ModelError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         self.0.chain().next()
     }
 }
 
 /// A failure while initializing a [`Scanner`].
-///
-/// The underlying model-runtime error is available through
-/// [`std::error::Error::source`] without exposing the runtime as part of this
-/// crate's public API.
 #[derive(Debug, thiserror::Error)]
-#[error("model initialization failed: {source}")]
-pub struct InitializationError {
-    #[source]
-    source: ModelFailure,
+#[non_exhaustive]
+pub enum InitializationError {
+    /// The embedded model could not be parsed, optimized, or prepared.
+    #[error("model initialization failed: {0}")]
+    Model(#[from] ModelError),
 }
 
-/// A failure while scoring an audio media source.
-///
-/// Backend-specific errors remain available through [`std::error::Error::source`]
-/// without becoming part of this crate's public API.
+/// A failure while decoding an input audio file.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum DecodeError {
+    /// The input could not be parsed or decoded as WAV, AIFF, or FLAC.
+    ///
+    /// The underlying decoder error is available through
+    /// [`std::error::Error::source`].
+    #[error("could not decode audio: {source}")]
+    #[non_exhaustive]
+    Malformed {
+        /// The decoder failure that produced this error.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+    /// The file declares no usable audio track, or that track decoded to nothing.
+    #[error("audio file has no usable audio track")]
+    NoUsableAudio,
+    /// The track is companded rather than linear PCM.
+    #[error("A-law and mu-law audio are not lossless PCM")]
+    NotLinearPcm,
+}
+
+/// A failure while scoring audio.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum ScoreError {
-    /// The source could not be decoded or prepared.
+    /// The input could not be decoded.
     #[error("{0}")]
-    Audio(#[from] audio::Error),
+    Decode(#[from] DecodeError),
+    /// The sample rate is outside the range the model supports.
+    #[error(
+        "{rate} Hz sample rate is outside the supported {MIN_SAMPLE_RATE}-{MAX_SAMPLE_RATE} Hz range"
+    )]
+    #[non_exhaustive]
+    UnsupportedSampleRate {
+        /// The audio's sample rate, in hertz.
+        rate: u32,
+    },
+    /// The audio is neither mono nor stereo.
+    #[error("{channels} channels; only mono and stereo are supported")]
+    #[non_exhaustive]
+    UnsupportedChannelCount {
+        /// The audio's channel count.
+        channels: usize,
+    },
+    /// The audio cannot fill one analysis window.
+    #[error("audio is shorter than the {WINDOW_SECONDS}-second analysis window")]
+    TooShort,
     /// The model could not score prepared audio.
     #[error("model inference failed: {0}")]
-    Inference(#[source] Box<dyn std::error::Error + Send + Sync + 'static>),
+    Inference(#[from] ModelError),
 }
 
 const ENCODERS: [Encoder; ENCODER_COUNT] = [
@@ -90,7 +132,7 @@ const ENCODERS: [Encoder; ENCODER_COUNT] = [
 ];
 
 /// A source encoder class predicted by the model.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[non_exhaustive]
 pub enum Encoder {
     /// MP3.
@@ -115,6 +157,7 @@ pub enum Encoder {
 
 impl Encoder {
     /// Return this encoder's stable machine-readable identifier.
+    #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Mp3 => "mp3",
@@ -150,6 +193,24 @@ impl fmt::Display for Encoder {
     }
 }
 
+/// The error returned when a string does not name an [`Encoder`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[error("not a known encoder identifier")]
+#[non_exhaustive]
+pub struct UnknownEncoder;
+
+impl FromStr for Encoder {
+    type Err = UnknownEncoder;
+
+    /// Parse an identifier produced by [`Encoder::as_str`].
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        ENCODERS
+            .into_iter()
+            .find(|encoder| encoder.as_str() == text)
+            .ok_or(UnknownEncoder)
+    }
+}
+
 /// Model probabilities pooled across a track's analysis windows.
 #[derive(Clone, Debug)]
 pub struct TrackScore {
@@ -159,14 +220,14 @@ pub struct TrackScore {
 
 impl TrackScore {
     /// Return the probability that this track is a lossy transcode.
-    pub const fn transcode_probability(&self) -> f32 {
+    #[must_use]
+    pub fn transcode_probability(&self) -> f32 {
         self.transcode_probability
     }
 
-    /// Return the probability for one encoder class.
-    ///
-    /// This probability is conditional on the track being a transcode.
-    pub const fn encoder_probability(&self, encoder: Encoder) -> f32 {
+    /// Return the probability for one encoder class (conditional on being a transcode).
+    #[must_use]
+    pub fn encoder_probability(&self, encoder: Encoder) -> f32 {
         self.encoder_probabilities[encoder.index()]
     }
 
@@ -180,6 +241,7 @@ impl TrackScore {
     }
 
     /// Return the most likely source encoder and its conditional probability.
+    #[must_use]
     pub fn most_likely_encoder(&self) -> (Encoder, f32) {
         self.encoder_probabilities()
             .reduce(|best, candidate| {
@@ -199,12 +261,16 @@ pub struct Scanner {
     transforms: TransformCache,
 }
 
+impl fmt::Debug for Scanner {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.debug_struct("Scanner").finish_non_exhaustive()
+    }
+}
+
 impl Scanner {
     /// Construct a scanner using the downloaded-and-embedded model.
-    pub fn new() -> std::result::Result<Self, InitializationError> {
-        let model = Model::new().map_err(|error| InitializationError {
-            source: ModelFailure(error),
-        })?;
+    pub fn new() -> Result<Self, InitializationError> {
+        let model = Model::new().map_err(ModelError)?;
         Ok(Self {
             model,
             transforms: TransformCache::default(),
@@ -212,28 +278,67 @@ impl Scanner {
     }
 
     /// Score one WAV, AIFF, or FLAC media source.
-    pub fn score<S: MediaSource>(&self, source: S) -> std::result::Result<TrackScore, ScoreError> {
-        let windows = prepare(source, &self.transforms)?;
-        let scores = self
-            .model
-            .run(windows)
-            .map_err(|error| ScoreError::Inference(Box::new(ModelFailure(error))))?;
+    pub fn score<S: MediaSource>(&self, mut source: S) -> Result<TrackScore, ScoreError> {
+        self.score_dyn(&mut source)
+    }
+
+    /// Score planar PCM that has already been decoded.
+    ///
+    /// `channels` holds one slice per channel, each already at `sample_rate`
+    /// and unresampled. Callers holding a `Vec<Vec<f32>>` can pass
+    /// `&channels.iter().map(Vec::as_slice).collect::<Vec<_>>()`.
+    ///
+    /// Like [`Scanner::score`], only the first 20 seconds are examined. Stereo
+    /// input is truncated to its shorter channel.
+    pub fn score_samples(
+        &self,
+        channels: &[&[f32]],
+        sample_rate: u32,
+    ) -> Result<TrackScore, ScoreError> {
+        self.run(channels, sample_rate)
+    }
+
+    fn score_dyn(&self, source: &mut dyn MediaSource) -> Result<TrackScore, ScoreError> {
+        let clip = audio::decode(source)?;
+        let channels = clip.channels.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        self.run(&channels, clip.sample_rate)
+    }
+
+    fn run(&self, channels: &[&[f32]], sample_rate: u32) -> Result<TrackScore, ScoreError> {
+        validate(sample_rate, channels.len())?;
+        let frames = channels
+            .iter()
+            .map(|channel| channel.len())
+            .min()
+            .unwrap_or(0)
+            .min(MAX_SECONDS * sample_rate as usize);
+        let cropped = channels
+            .iter()
+            .map(|channel| &channel[..frames])
+            .collect::<Vec<_>>();
+
+        let offsets = spectrogram::window_offsets(frames, spectrogram::window_len(sample_rate));
+        if offsets.is_empty() {
+            return Err(ScoreError::TooShort);
+        }
+        let windows = self
+            .transforms
+            .get(sample_rate)
+            .write_windows(&cropped, &offsets);
+        let scores = self.model.run(windows).map_err(ModelError)?;
         Ok(TrackScore::pool(&scores))
     }
 }
 
-fn prepare<S: MediaSource>(
-    source: S,
-    transforms: &TransformCache,
-) -> std::result::Result<Vec<f32>, audio::Error> {
-    let clip = audio::decode(source)?;
-    let crop_len = clip.sample_rate as usize / 2;
-    let offsets = spectrogram::window_offsets(clip.channels[0].len(), crop_len);
-    if offsets.is_empty() {
-        return Err(audio::Error::TooShort);
+/// Reject audio the model cannot accept, whether decoded here or supplied.
+pub(crate) fn validate(sample_rate: u32, channels: usize) -> Result<(), ScoreError> {
+    if !(MIN_SAMPLE_RATE..=MAX_SAMPLE_RATE).contains(&sample_rate) {
+        return Err(ScoreError::UnsupportedSampleRate { rate: sample_rate });
     }
-    let transform = transforms.get(clip.sample_rate);
-    Ok(transform.write_windows(&clip.channels, &offsets))
+    if !(1..=2).contains(&channels) {
+        return Err(ScoreError::UnsupportedChannelCount { channels });
+    }
+    Ok(())
 }
 
 impl TrackScore {
@@ -268,12 +373,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn model_failures_display_and_preserve_context() {
-        let failure = ModelFailure(TractError::msg("backend detail").context("operation"));
+    fn model_errors_display_and_preserve_context() {
+        let failure = ModelError(TractError::msg("backend detail").context("operation"));
         assert_eq!(failure.to_string(), "operation: backend detail");
         let context = std::error::Error::source(&failure).unwrap();
         assert_eq!(context.to_string(), "operation");
         assert_eq!(context.source().unwrap().to_string(), "backend detail");
+    }
+
+    #[test]
+    fn one_model_error_serves_initialization_and_inference() {
+        let failure = || ModelError(TractError::msg("backend detail").context("operation"));
+
+        // Both paths convert from the same type and keep their own prefix.
+        assert_eq!(
+            InitializationError::from(failure()).to_string(),
+            "model initialization failed: operation: backend detail"
+        );
+        assert_eq!(
+            ScoreError::from(failure()).to_string(),
+            "model inference failed: operation: backend detail"
+        );
+
+        // The runtime chain stays reachable without exposing the runtime.
+        let score_error = ScoreError::from(failure());
+        let model = std::error::Error::source(&score_error).expect("model error is the source");
+        assert!(model.downcast_ref::<ModelError>().is_some());
+        assert_eq!(model.source().unwrap().to_string(), "operation");
     }
 
     #[test]
@@ -319,6 +445,32 @@ mod tests {
                 "musepack",
             ]
         );
+    }
+
+    #[test]
+    fn encoder_identifiers_round_trip() {
+        for encoder in ENCODERS {
+            assert_eq!(encoder.as_str().parse::<Encoder>(), Ok(encoder));
+        }
+        assert_eq!("MP3".parse::<Encoder>(), Err(UnknownEncoder));
+        assert_eq!("".parse::<Encoder>(), Err(UnknownEncoder));
+    }
+
+    #[test]
+    fn unsupported_audio_is_rejected_before_decoding() {
+        assert!(matches!(
+            validate(4_000, 2),
+            Err(ScoreError::UnsupportedSampleRate { rate: 4_000 })
+        ));
+        assert!(matches!(
+            validate(44_100, 6),
+            Err(ScoreError::UnsupportedChannelCount { channels: 6 })
+        ));
+        assert!(matches!(
+            validate(44_100, 0),
+            Err(ScoreError::UnsupportedChannelCount { channels: 0 })
+        ));
+        assert!(validate(44_100, 2).is_ok());
     }
 
     #[test]
