@@ -12,7 +12,7 @@ const MODEL: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/model.onnx"));
 
 /// A failure while loading the embedded model.
 #[derive(Debug, thiserror::Error)]
-pub enum InitializationError {
+pub(crate) enum InitializationError {
     /// The embedded ONNX bytes could not be parsed.
     #[error("could not parse the embedded ONNX model: {0}")]
     Parse(#[source] Box<dyn std::error::Error + Send + Sync>),
@@ -26,9 +26,9 @@ pub enum InitializationError {
 
 /// A failure while running the embedded model.
 #[derive(Debug, thiserror::Error)]
-pub enum InferenceError {
+pub(crate) enum InferenceError {
     /// The inference runtime failed.
-    #[error("ONNX inference failed: {0}")]
+    #[error("could not run the ONNX model: {0}")]
     Run(#[source] Box<dyn std::error::Error + Send + Sync>),
     /// The fixed model returned the wrong number of output heads.
     #[error("model returned {actual} outputs; expected 3")]

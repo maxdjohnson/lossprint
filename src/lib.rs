@@ -1,8 +1,8 @@
 #![warn(missing_docs)]
 //! Detect lossy transcodes hiding in lossless audio files.
 //!
-//! Reuse a [`Scanner`] when scoring multiple tracks so that its model, worker
-//! pool, and spectrogram transforms stay initialized.
+//! Reuse a [`Scanner`] when scoring multiple tracks so that its model and
+//! spectrogram transforms stay initialized.
 //!
 //! ```no_run
 //! use lossprint::{Codec, Scanner};
@@ -14,7 +14,7 @@
 //! println!("P(transcode) = {:.3}", score.transcode_probability());
 //! println!(
 //!     "P(mp3 | transcode) = {:.3}",
-//!     score.codec_probabilities().probability(Codec::Mp3)
+//!     score.codec_probability(Codec::Mp3)
 //! );
 //! if score.transcode_probability() >= 0.5 {
 //!     println!("transcode");
@@ -28,34 +28,70 @@ mod model;
 mod spectrogram;
 
 use model::{Model, WindowScore, CODEC_COUNT};
-use rayon::prelude::*;
 use spectrogram::TransformCache;
+use std::fmt;
 use std::path::Path;
-use std::sync::mpsc::sync_channel;
 
-const READY_FILES: usize = 2;
-
-pub use audio::Error as AudioError;
-pub use model::{InferenceError, InitializationError};
-
-/// A result returned by this crate.
+/// A convenience result for code that both constructs and uses a scanner.
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// A failure produced while constructing or using a scanner.
+/// A failure while initializing a [`Scanner`].
+///
+/// The underlying model-runtime error is available through
+/// [`std::error::Error::source`] without exposing the runtime as part of this
+/// crate's public API.
 #[derive(Debug, thiserror::Error)]
+#[error("model initialization failed: {source}")]
+pub struct InitializationError {
+    #[source]
+    source: Box<dyn std::error::Error + Send + Sync + 'static>,
+}
+
+impl InitializationError {
+    fn new(error: impl std::error::Error + Send + Sync + 'static) -> Self {
+        Self {
+            source: Box::new(error),
+        }
+    }
+}
+
+/// A failure while scoring an audio file.
+///
+/// The variants distinguish errors tied to one input from failures in the
+/// shared model runtime. Backend-specific errors remain available through
+/// [`std::error::Error::source`] without becoming part of this crate's public
+/// API.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum ScoreError {
+    /// The input file could not be decoded or prepared.
+    #[error("{0}")]
+    Audio(#[source] Box<dyn std::error::Error + Send + Sync + 'static>),
+    /// The model could not score prepared audio.
+    #[error("model inference failed: {0}")]
+    Inference(#[source] Box<dyn std::error::Error + Send + Sync + 'static>),
+}
+
+impl ScoreError {
+    fn audio(error: impl std::error::Error + Send + Sync + 'static) -> Self {
+        Self::Audio(Box::new(error))
+    }
+
+    fn inference(error: impl std::error::Error + Send + Sync + 'static) -> Self {
+        Self::Inference(Box::new(error))
+    }
+}
+
+/// A convenience error for code that both constructs and uses a scanner.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum Error {
-    /// The embedded model could not be initialized.
+    /// Scanner initialization failed.
     #[error(transparent)]
     Initialization(#[from] InitializationError),
-    /// The parallel audio worker pool could not be created.
-    #[error("could not create audio worker pool: {0}")]
-    WorkerPool(#[from] rayon::ThreadPoolBuildError),
-    /// An input file could not be decoded or prepared.
+    /// Scoring failed.
     #[error(transparent)]
-    Audio(#[from] AudioError),
-    /// The model could not score prepared audio.
-    #[error(transparent)]
-    Inference(#[from] InferenceError),
+    Score(#[from] ScoreError),
 }
 
 const CODECS: [Codec; CODEC_COUNT] = [
@@ -94,21 +130,6 @@ pub enum Codec {
 }
 
 impl Codec {
-    /// Return the stable lowercase label used by the CLI.
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Mp3 => "mp3",
-            Self::Aac => "aac",
-            Self::AacAt => "aac_at",
-            Self::FdkAac => "fdk_aac",
-            Self::Vorbis => "vorbis",
-            Self::Opus => "opus",
-            Self::Mp2 => "mp2",
-            Self::Wma => "wma",
-            Self::Musepack => "musepack",
-        }
-    }
-
     const fn index(self) -> usize {
         match self {
             Self::Mp3 => 0,
@@ -124,21 +145,19 @@ impl Codec {
     }
 }
 
-/// Conditional source-codec probabilities returned for a track.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct CodecProbabilities {
-    values: [f32; CODEC_COUNT],
-}
-
-impl CodecProbabilities {
-    /// Return the probability for one codec or encoder class.
-    pub const fn probability(&self, codec: Codec) -> f32 {
-        self.values[codec.index()]
-    }
-
-    /// Iterate over every codec and probability in model order.
-    pub fn iter(&self) -> impl Iterator<Item = (Codec, f32)> + '_ {
-        CODECS.into_iter().zip(self.values.iter().copied())
+impl fmt::Display for Codec {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Mp3 => "mp3",
+            Self::Aac => "aac",
+            Self::AacAt => "aac_at",
+            Self::FdkAac => "fdk_aac",
+            Self::Vorbis => "vorbis",
+            Self::Opus => "opus",
+            Self::Mp2 => "mp2",
+            Self::Wma => "wma",
+            Self::Musepack => "musepack",
+        })
     }
 }
 
@@ -146,7 +165,7 @@ impl CodecProbabilities {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TrackScore {
     transcode_probability: f32,
-    codec_probabilities: CodecProbabilities,
+    codec_probabilities: [f32; CODEC_COUNT],
 }
 
 impl TrackScore {
@@ -155,32 +174,31 @@ impl TrackScore {
         self.transcode_probability
     }
 
-    /// Return source-codec probabilities conditional on the track being a transcode.
-    pub const fn codec_probabilities(&self) -> &CodecProbabilities {
-        &self.codec_probabilities
-    }
-}
-
-/// Configuration for constructing a reusable [`Scanner`].
-#[derive(Clone, Copy, Debug, Default)]
-pub struct ScannerBuilder {
-    jobs: usize,
-}
-
-impl ScannerBuilder {
-    /// Set the number of parallel audio workers; zero uses Rayon's default.
-    pub const fn jobs(mut self, jobs: usize) -> Self {
-        self.jobs = jobs;
-        self
+    /// Return the probability for one codec or encoder class.
+    ///
+    /// This probability is conditional on the track being a transcode.
+    pub const fn codec_probability(&self, codec: Codec) -> f32 {
+        self.codec_probabilities[codec.index()]
     }
 
-    /// Build a scanner using the downloaded-and-embedded model.
-    pub fn build(self) -> Result<Scanner> {
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(self.jobs)
-            .build()?;
-        let model = Model::new()?;
-        Ok(Scanner::from_parts(model, pool))
+    /// Iterate over every codec and conditional probability in model order.
+    pub fn codec_probabilities(&self) -> impl Iterator<Item = (Codec, f32)> + '_ {
+        CODECS
+            .into_iter()
+            .zip(self.codec_probabilities.iter().copied())
+    }
+
+    /// Return the most likely source codec and its conditional probability.
+    pub fn most_likely_codec(&self) -> (Codec, f32) {
+        self.codec_probabilities()
+            .reduce(|best, candidate| {
+                if candidate.1 > best.1 {
+                    candidate
+                } else {
+                    best
+                }
+            })
+            .expect("the fixed model has codec classes")
     }
 }
 
@@ -188,98 +206,56 @@ impl ScannerBuilder {
 pub struct Scanner {
     model: Model,
     transforms: TransformCache,
-    pool: rayon::ThreadPool,
 }
 
 impl Scanner {
     /// Construct a scanner using the downloaded-and-embedded model.
-    pub fn new() -> Result<Self> {
-        ScannerBuilder::default().build()
-    }
-
-    /// Begin configuring a scanner.
-    pub fn builder() -> ScannerBuilder {
-        ScannerBuilder::default()
-    }
-
-    fn from_parts(model: Model, pool: rayon::ThreadPool) -> Self {
-        Self {
+    pub fn new() -> std::result::Result<Self, InitializationError> {
+        let model = Model::new().map_err(InitializationError::new)?;
+        Ok(Self {
             model,
             transforms: TransformCache::default(),
-            pool,
-        }
+        })
     }
 
     /// Score one WAV, AIFF, or FLAC file.
-    pub fn score_file(&self, path: impl AsRef<Path>) -> Result<TrackScore> {
-        let windows = prepare(path.as_ref(), &self.transforms)?;
+    pub fn score_file(
+        &self,
+        path: impl AsRef<Path>,
+    ) -> std::result::Result<TrackScore, ScoreError> {
+        let windows = prepare(path.as_ref(), &self.transforms).map_err(ScoreError::audio)?;
         self.score_windows(&windows)
     }
 
-    /// Score files in parallel while preserving their input order.
+    /// Score files serially in input order.
     ///
-    /// Each track's windows are scored together in one model call. The outer
-    /// [`Result`] reports an inference failure; each inner result reports an
-    /// [`AudioError`] for only the file at that same index.
-    pub fn score_files<P>(
-        &self,
-        files: &[P],
-    ) -> Result<Vec<std::result::Result<TrackScore, AudioError>>>
+    /// Each track's windows are scored together in one model call. Every input
+    /// produces one same-index result containing its [`ScoreError`], if any.
+    pub fn score_files<P>(&self, files: &[P]) -> Vec<std::result::Result<TrackScore, ScoreError>>
     where
-        P: AsRef<Path> + Sync,
+        P: AsRef<Path>,
     {
-        if files.is_empty() {
-            return Ok(Vec::new());
-        }
-        let mut scores = (0..files.len()).map(|_| None).collect::<Vec<_>>();
-
-        std::thread::scope(|scope| -> Result<()> {
-            let (sender, receiver) = sync_channel(READY_FILES);
-            scope.spawn(move || {
-                let _ = self.pool.install(|| {
-                    files.par_iter().enumerate().try_for_each_with(
-                        sender,
-                        |sender, (index, path)| {
-                            sender
-                                .send((index, prepare(path.as_ref(), &self.transforms)))
-                                .map_err(|_| ())
-                        },
-                    )
-                });
-            });
-
-            for (index, prepared) in receiver {
-                match prepared {
-                    Ok(windows) => scores[index] = Some(Ok(self.score_windows(&windows)?)),
-                    Err(error) => scores[index] = Some(Err(error)),
-                }
-            }
-            Ok(())
-        })?;
-
-        Ok(scores
-            .into_iter()
-            .map(|score| score.expect("every input produces one result"))
-            .collect())
+        files
+            .iter()
+            .map(|path| self.score_file(path.as_ref()))
+            .collect()
     }
 
-    fn score_windows(&self, windows: &[f32]) -> Result<TrackScore> {
-        let scores = self.model.run(windows)?;
+    fn score_windows(&self, windows: &[f32]) -> std::result::Result<TrackScore, ScoreError> {
+        let scores = self.model.run(windows).map_err(ScoreError::inference)?;
         Ok(TrackScore::pool(&scores))
     }
 }
 
-/// Return whether a path has a supported WAV, AIFF, or FLAC extension.
-pub fn has_supported_extension(path: impl AsRef<Path>) -> bool {
-    audio::has_supported_extension(path.as_ref())
-}
-
-fn prepare(path: &Path, transforms: &TransformCache) -> std::result::Result<Vec<f32>, AudioError> {
+fn prepare(
+    path: &Path,
+    transforms: &TransformCache,
+) -> std::result::Result<Vec<f32>, audio::Error> {
     let clip = audio::decode(path)?;
     let crop_len = clip.sample_rate as usize / 2;
     let offsets = spectrogram::window_offsets(clip.channels[0].len(), crop_len);
     if offsets.is_empty() {
-        return Err(AudioError::TooShort);
+        return Err(audio::Error::TooShort);
     }
     let transform = transforms.get(clip.sample_rate);
     Ok(transform.write_windows(&clip.channels, &offsets))
@@ -307,9 +283,7 @@ impl TrackScore {
         let codec_total: f32 = geometric.iter().sum();
         Self {
             transcode_probability: 1.0 / (1.0 + (-mean_logit).exp()),
-            codec_probabilities: CodecProbabilities {
-                values: geometric.map(|probability| probability / codec_total),
-            },
+            codec_probabilities: geometric.map(|probability| probability / codec_total),
         }
     }
 }
@@ -317,6 +291,49 @@ impl TrackScore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("backend detail")]
+    struct BackendError;
+
+    #[test]
+    fn public_errors_preserve_backend_sources() {
+        fn assert_public_error<T: std::error::Error + Send + Sync + 'static>() {}
+        assert_public_error::<InitializationError>();
+        assert_public_error::<ScoreError>();
+        assert_public_error::<Error>();
+
+        let initialization = InitializationError::new(BackendError);
+        assert_eq!(
+            initialization.to_string(),
+            "model initialization failed: backend detail"
+        );
+        assert_eq!(
+            std::error::Error::source(&initialization)
+                .unwrap()
+                .to_string(),
+            "backend detail"
+        );
+
+        let audio = ScoreError::audio(BackendError);
+        assert!(matches!(&audio, ScoreError::Audio(_)));
+        assert_eq!(audio.to_string(), "backend detail");
+        assert_eq!(
+            std::error::Error::source(&audio).unwrap().to_string(),
+            "backend detail"
+        );
+
+        let inference = ScoreError::inference(BackendError);
+        assert!(matches!(&inference, ScoreError::Inference(_)));
+        assert_eq!(
+            inference.to_string(),
+            "model inference failed: backend detail"
+        );
+        assert_eq!(
+            std::error::Error::source(&inference).unwrap().to_string(),
+            "backend detail"
+        );
+    }
 
     #[test]
     fn model_outputs_map_to_codecs() {
@@ -338,7 +355,7 @@ mod tests {
             (Codec::Musepack, 0.28),
         ];
         for ((actual_codec, actual_probability), (expected_codec, expected_probability)) in
-            score.codec_probabilities().iter().zip(expected)
+            score.codec_probabilities().zip(expected)
         {
             assert_eq!(actual_codec, expected_codec);
             assert!((actual_probability - expected_probability).abs() < 1e-6);
@@ -363,11 +380,10 @@ mod tests {
         let aac = 0.06_f32.sqrt();
         let floor = 1e-6_f32;
         let total = mp3 + aac + 7.0 * floor;
-        let probabilities = score.codec_probabilities();
-        assert!((probabilities.probability(Codec::Mp3) - mp3 / total).abs() < 1e-6);
-        assert!((probabilities.probability(Codec::Aac) - aac / total).abs() < 1e-6);
-        assert!((probabilities.probability(Codec::AacAt) - floor / total).abs() < 1e-8);
-        assert!((probabilities.probability(Codec::Musepack) - floor / total).abs() < 1e-8);
+        assert!((score.codec_probability(Codec::Mp3) - mp3 / total).abs() < 1e-6);
+        assert!((score.codec_probability(Codec::Aac) - aac / total).abs() < 1e-6);
+        assert!((score.codec_probability(Codec::AacAt) - floor / total).abs() < 1e-8);
+        assert!((score.codec_probability(Codec::Musepack) - floor / total).abs() < 1e-8);
     }
 
     #[test]

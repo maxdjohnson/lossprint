@@ -10,14 +10,13 @@ use symphonia::core::formats::TrackType;
 use symphonia::core::io::MediaSourceStream;
 use symphonia::default::{get_codecs, get_probe};
 
-const EXTENSIONS: [&str; 4] = ["aif", "aiff", "flac", "wav"];
 const MAX_SECONDS: usize = 20;
 const MIN_SAMPLE_RATE: u32 = 8_000;
 const MAX_SAMPLE_RATE: u32 = 384_000;
 
 /// A failure while decoding or validating an input audio file.
 #[derive(Debug, thiserror::Error)]
-pub enum Error {
+pub(crate) enum Error {
     /// The file could not be opened.
     #[error("could not open file: {0}")]
     Open(#[source] std::io::Error),
@@ -64,16 +63,6 @@ pub enum Error {
 pub(crate) struct Clip {
     pub(crate) channels: Vec<Vec<f32>>,
     pub(crate) sample_rate: u32,
-}
-
-pub(crate) fn has_supported_extension(path: &Path) -> bool {
-    path.extension()
-        .and_then(|value| value.to_str())
-        .is_some_and(|extension| {
-            EXTENSIONS
-                .iter()
-                .any(|candidate| extension.eq_ignore_ascii_case(candidate))
-        })
 }
 
 /// Decode at most 20 seconds without resampling, downmixing, or requantizing.

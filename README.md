@@ -39,8 +39,8 @@ Add the crate to an application:
 cargo add lossprint
 ```
 
-Keep a `Scanner` alive while processing multiple tracks so its model, worker
-pool, and spectrogram transforms are reused.
+Keep a `Scanner` alive while processing multiple tracks so its model and
+spectrogram transforms are reused.
 
 ```rust,no_run
 use lossprint::{Codec, Scanner};
@@ -52,8 +52,11 @@ fn main() -> lossprint::Result<()> {
     println!("P(transcode) = {:.3}", score.transcode_probability());
     println!(
         "P(mp3 | transcode) = {:.3}",
-        score.codec_probabilities().probability(Codec::Mp3),
+        score.codec_probability(Codec::Mp3),
     );
+
+    let (codec, probability) = score.most_likely_codec();
+    println!("most likely source: {codec} ({probability:.3})");
 
     // The library returns probabilities; the application chooses its threshold.
     if score.transcode_probability() >= 0.5 {
@@ -64,21 +67,27 @@ fn main() -> lossprint::Result<()> {
 }
 ```
 
-`Codec` covers all nine codec and encoder classes. Use
-`score.codec_probabilities().iter()` to visit each class and probability in
-model order. These probabilities are conditional on the track being a
-transcode.
+`Scanner::new` returns `InitializationError`; scoring methods return
+`ScoreError`. `ScoreError::Audio` identifies a problem with one input, while
+`ScoreError::Inference` identifies a model-runtime failure. Their underlying
+decoder and inference errors are exposed through the standard error source
+chain without making those libraries part of lossprint's public API.
+`lossprint::Error` and `lossprint::Result` are convenience umbrella types for
+code, like the example above, that performs both initialization and scoring.
 
-`Scanner::score_files` prepares files in parallel and returns results in input
-order. Each track's analysis windows are scored together in one model call. A
-decoding or input error affects only that file's inner result; an inference
-failure is returned by the outer result. Configure parallelism with
-`Scanner::builder()`.
+`Codec` covers all nine codec and encoder classes and implements `Display`.
+Use `score.codec_probabilities()` to visit each class and probability in model
+order. These probabilities are conditional on the track being a transcode.
+
+`Scanner::score_files` scores files serially in input order. Each item is a
+success or failure for the file at the same index, and each track's analysis
+windows are scored together in one model call. Input, decoding, and inference
+errors are reported on the affected item. A scanner can be shared across
+threads, so applications control track-level concurrency themselves.
 
 The build downloads the pinned v0.6 model, verifies its SHA-256 checksum,
 caches it under Cargo's home directory, and embeds it in the program. Runtime
-scoring therefore needs no network. A scanner can be shared across threads;
-scoring only requires `&Scanner`.
+scoring therefore needs no network. Scoring only requires `&Scanner`.
 
 ## Build
 
@@ -102,8 +111,8 @@ lossprint --jobs 4 ~/Music
 The CLI's default threshold is `0.5`. Raise it to reduce false positives, or
 lower it to favor recall.
 
-`--jobs 0`, the default, uses one worker per logical core. Set a smaller value
-to limit CPU and memory use.
+The CLI scans tracks in parallel. `--jobs 0`, the default, lets Rayon choose
+the worker count. Set a smaller value to limit CPU and memory use.
 
 Directory scans accept `.wav`, `.aif`, `.aiff`, and `.flac`. WAV and
 AIFF must contain linear integer or floating-point PCM. Input must be mono or

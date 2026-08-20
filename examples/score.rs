@@ -9,8 +9,8 @@ fn main() -> lossprint::Result<()> {
     let scanner = Scanner::new()?;
     let score = scanner.score_file(path)?;
     println!("transcode\t{:.7}", score.transcode_probability());
-    for (codec, probability) in score.codec_probabilities().iter() {
-        println!("{}\t{probability:.7}", codec.as_str());
+    for (codec, probability) in score.codec_probabilities() {
+        println!("{codec}\t{probability:.7}");
     }
     Ok(())
 }

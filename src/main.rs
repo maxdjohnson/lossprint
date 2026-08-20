@@ -2,12 +2,14 @@
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
-use lossprint::{has_supported_extension, Codec, Scanner, TrackScore};
+use lossprint::Scanner;
+use rayon::prelude::*;
 use std::io::{BufWriter, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 const DEFAULT_THRESHOLD: f32 = 0.5;
+const SUPPORTED_EXTENSIONS: [&str; 4] = ["aif", "aiff", "flac", "wav"];
 
 #[derive(Debug, Parser)]
 #[command(
@@ -28,7 +30,7 @@ struct Args {
     #[arg(short, long, default_value_t = DEFAULT_THRESHOLD)]
     threshold: f32,
 
-    /// Parallel workers; zero uses one worker per logical core.
+    /// Parallel workers; zero lets Rayon choose.
     #[arg(short, long, default_value_t = 0)]
     jobs: usize,
 }
@@ -43,23 +45,34 @@ fn main() -> Result<()> {
     if files.is_empty() {
         bail!("no WAV, AIFF, or FLAC files found")
     }
-    let scanner = Scanner::builder().jobs(args.jobs).build()?;
-    let results = scanner.score_files(&files)?;
+    let scanner = Scanner::new()?;
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(args.jobs)
+        .build()
+        .context("could not create worker pool")?;
+    let results = pool.install(|| {
+        files
+            .par_iter()
+            .map(|path| scanner.score_file(path))
+            .collect::<Vec<_>>()
+    });
 
     let mut stdout = BufWriter::new(std::io::stdout().lock());
     let mut failures = 0_usize;
     for (path, result) in files.iter().zip(results) {
         match result {
             Ok(score) => {
-                let (verdict, codec) = classification(&score, args.threshold);
-                writeln!(
-                    stdout,
-                    "{:.7}\t{}\t{}\t{}",
-                    score.transcode_probability(),
-                    verdict,
-                    codec,
-                    path.display()
-                )?;
+                let probability = score.transcode_probability();
+                if probability < args.threshold {
+                    writeln!(stdout, "{probability:.7}\tclean\t-\t{}", path.display())?;
+                } else {
+                    let (codec, _) = score.most_likely_codec();
+                    writeln!(
+                        stdout,
+                        "{probability:.7}\ttranscode\t{codec}\t{}",
+                        path.display()
+                    )?;
+                }
             }
             Err(error) => {
                 failures += 1;
@@ -72,28 +85,6 @@ fn main() -> Result<()> {
         bail!("could not scan {failures} file(s)")
     }
     Ok(())
-}
-
-fn classification(score: &TrackScore, threshold: f32) -> (&'static str, &'static str) {
-    if score.transcode_probability() < threshold {
-        return ("clean", "-");
-    }
-    ("transcode", most_likely_codec(score).as_str())
-}
-
-fn most_likely_codec(score: &TrackScore) -> Codec {
-    score
-        .codec_probabilities()
-        .iter()
-        .reduce(|best, candidate| {
-            if candidate.1 > best.1 {
-                candidate
-            } else {
-                best
-            }
-        })
-        .expect("the fixed model has codec classes")
-        .0
 }
 
 fn discover(inputs: &[PathBuf]) -> Result<Vec<PathBuf>> {
@@ -118,4 +109,14 @@ fn discover(inputs: &[PathBuf]) -> Result<Vec<PathBuf>> {
     files.sort();
     files.dedup();
     Ok(files)
+}
+
+fn has_supported_extension(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            SUPPORTED_EXTENSIONS
+                .iter()
+                .any(|supported| extension.eq_ignore_ascii_case(supported))
+        })
 }
