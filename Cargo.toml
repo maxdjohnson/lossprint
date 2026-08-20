@@ -15,7 +15,14 @@ publish = ["crates-io"]
 
 [features]
 default = ["cli"]
-cli = ["dep:anyhow", "dep:clap", "dep:rayon", "dep:walkdir"]
+cli = [
+    "dep:anyhow",
+    "dep:clap",
+    "dep:rayon",
+    "dep:serde",
+    "dep:serde_json",
+    "dep:walkdir",
+]
 
 [[bin]]
 name = "lossprint"
@@ -27,6 +34,8 @@ anyhow = { version = "1.0.104", optional = true }
 clap = { version = "=4.6.6", features = ["derive"], optional = true }
 rayon = { version = "1.12", optional = true }
 rustfft = "6.4"
+serde = { version = "1.0", features = ["derive"], optional = true }
+serde_json = { version = "1.0", optional = true }
 symphonia = { version = "=0.6.1", default-features = false, features = ["aiff", "flac", "pcm", "wav"] }
 thiserror = "2.0"
 tract-onnx = { version = "=0.23.4", default-features = false }

@@ -541,6 +541,8 @@ dependencies = [
  "clap",
  "rayon",
  "rustfft",
+ "serde",
+ "serde_json",
  "sha2",
  "symphonia",
  "thiserror",

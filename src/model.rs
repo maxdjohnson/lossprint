@@ -6,7 +6,7 @@ use tract_onnx::prelude::*;
 
 use crate::spectrogram::{N_BINS, N_FRAMES, WINDOW_VALUES};
 
-pub(crate) const CODEC_COUNT: usize = 9;
+pub(crate) const ENCODER_COUNT: usize = 9;
 
 const MODEL: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/model.onnx"));
 
@@ -39,30 +39,30 @@ pub(crate) enum InferenceError {
     /// The fixed model's transcode output is not float32.
     #[error("model's transcode output is not float32")]
     InvalidTranscodeOutputType,
-    /// The fixed model's codec output is not float32.
-    #[error("model's codec output is not float32")]
-    InvalidCodecOutputType,
-    /// The fixed model's codec output is not stored contiguously.
-    #[error("model's codec output is not contiguous")]
-    NonContiguousCodecOutput,
+    /// The fixed model's encoder output is not float32.
+    #[error("model's encoder output is not float32")]
+    InvalidEncoderOutputType,
+    /// The fixed model's encoder output is not stored contiguously.
+    #[error("model's encoder output is not contiguous")]
+    NonContiguousEncoderOutput,
     /// The fixed model returned the wrong number of predictions.
     #[error(
         "model returned the wrong output shape for {windows} windows: \
-         {transcode_values} transcode values and {codec_values} codec values"
+         {transcode_values} transcode values and {encoder_values} encoder values"
     )]
     UnexpectedOutputShape {
         /// Number of input windows.
         windows: usize,
         /// Number of returned transcode values.
         transcode_values: usize,
-        /// Number of returned codec values.
-        codec_values: usize,
+        /// Number of returned encoder values.
+        encoder_values: usize,
     },
 }
 
 pub(crate) struct WindowScore {
     pub transcode_probability: f32,
-    pub codec_probabilities: [f32; CODEC_COUNT],
+    pub encoder_probabilities: [f32; ENCODER_COUNT],
 }
 
 pub(crate) struct Model {
@@ -103,25 +103,25 @@ impl Model {
         let transcode = outputs[0]
             .to_plain_array_view::<f32>()
             .map_err(|_| InferenceError::InvalidTranscodeOutputType)?;
-        let codecs = outputs[1]
+        let encoders = outputs[1]
             .to_plain_array_view::<f32>()
-            .map_err(|_| InferenceError::InvalidCodecOutputType)?;
-        let codecs = codecs
+            .map_err(|_| InferenceError::InvalidEncoderOutputType)?;
+        let encoders = encoders
             .as_slice()
-            .ok_or(InferenceError::NonContiguousCodecOutput)?;
-        if transcode.len() != batch || codecs.len() != batch * CODEC_COUNT {
+            .ok_or(InferenceError::NonContiguousEncoderOutput)?;
+        if transcode.len() != batch || encoders.len() != batch * ENCODER_COUNT {
             return Err(InferenceError::UnexpectedOutputShape {
                 windows: batch,
                 transcode_values: transcode.len(),
-                codec_values: codecs.len(),
+                encoder_values: encoders.len(),
             });
         }
         Ok(transcode
             .iter()
-            .zip(codecs.chunks_exact(CODEC_COUNT))
+            .zip(encoders.chunks_exact(ENCODER_COUNT))
             .map(|(&transcode_probability, probabilities)| WindowScore {
                 transcode_probability,
-                codec_probabilities: std::array::from_fn(|index| probabilities[index]),
+                encoder_probabilities: std::array::from_fn(|index| probabilities[index]),
             })
             .collect())
     }

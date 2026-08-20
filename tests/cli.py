@@ -1,7 +1,7 @@
-#!/usr/bin/env python3
 """Exercise the packaged CLI against the release-hosted integration fixtures."""
 
 import argparse
+import json
 import math
 import subprocess
 import sys
@@ -9,7 +9,7 @@ import tempfile
 from pathlib import Path
 
 EXPECTED = {
-    "musdb18-hq-1.wav": (0.0006546, "clean", "-"),
+    "musdb18-hq-1.wav": (0.0006546, "clean", None),
     "musdb18-hq-1.mp3.wav": (0.9997401, "transcode", "mp3"),
 }
 PROBABILITY_TOLERANCE = 5e-4
@@ -46,6 +46,7 @@ def invoke(binary: Path, arguments: list[str | Path], expected_status: int = 0) 
     result = subprocess.run(
         [binary, *arguments],
         capture_output=True,
+        check=False,
         text=True,
     )
     sys.stdout.write(result.stdout)
@@ -58,39 +59,49 @@ def invoke(binary: Path, arguments: list[str | Path], expected_status: int = 0) 
     return result.stdout
 
 
-def assert_output(output: str, fixtures: Path) -> None:
-    rows = output.splitlines()
-    if len(rows) != len(EXPECTED):
-        fail(f"expected {len(EXPECTED)} output rows, got {len(rows)}")
+def assert_jsonl_output(output: str, fixtures: Path) -> None:
+    lines = output.splitlines()
+    if len(lines) != len(EXPECTED):
+        fail(f"expected {len(EXPECTED)} JSONL records, got {len(lines)}")
 
     seen = set()
     names = []
-    for row in rows:
-        fields = row.split("\t")
-        if len(fields) != 4:
-            fail(f"expected four tab-separated fields: {row!r}")
+    required_fields = {"transcode_probability", "verdict", "encoder", "path"}
+    for line in lines:
         try:
-            probability = float(fields[0])
-        except ValueError:
-            fail(f"invalid probability: {fields[0]!r}")
-        if not math.isfinite(probability) or not 0.0 <= probability <= 1.0:
-            fail(f"probability is outside [0, 1]: {fields[0]!r}")
+            record = json.loads(line)
+        except json.JSONDecodeError as error:
+            fail(f"invalid JSONL record: {error}")
+        if not isinstance(record, dict):
+            fail(f"JSONL record is not an object: {record!r}")
+        missing = required_fields - record.keys()
+        if missing:
+            fail(f"JSONL record is missing fields {sorted(missing)!r}: {record!r}")
 
-        name = fields[3].replace("\\", "/").rsplit("/", 1)[-1]
+        probability = record["transcode_probability"]
+        if isinstance(probability, bool) or not isinstance(probability, (int, float)):
+            fail(f"invalid probability: {probability!r}")
+        if not math.isfinite(probability) or not 0.0 <= probability <= 1.0:
+            fail(f"probability is outside [0, 1]: {probability!r}")
+
+        path = record["path"]
+        if not isinstance(path, str):
+            fail(f"path is not a string: {path!r}")
+        name = path.replace("\\", "/").rsplit("/", 1)[-1]
         if name not in EXPECTED:
             fail(f"unexpected fixture in output: {name!r}")
         if name in seen:
             fail(f"duplicate fixture in output: {name!r}")
-        if Path(fields[3]).resolve() != (fixtures / name).resolve():
-            fail(f"unexpected fixture path: {fields[3]!r}")
-        expected_probability, expected_verdict, expected_codec = EXPECTED[name]
+        if Path(path).resolve() != (fixtures / name).resolve():
+            fail(f"unexpected fixture path: {path!r}")
+        expected_probability, expected_verdict, expected_encoder = EXPECTED[name]
         if abs(probability - expected_probability) > PROBABILITY_TOLERANCE:
             fail(
                 f"unexpected probability for {name}: {probability:.7f}; "
                 f"expected {expected_probability:.7f} ± {PROBABILITY_TOLERANCE}"
             )
-        actual = (fields[1], fields[2])
-        expected = (expected_verdict, expected_codec)
+        actual = (record["verdict"], record["encoder"])
+        expected = (expected_verdict, expected_encoder)
         if actual != expected:
             fail(f"unexpected classification for {name}: {actual!r}")
         seen.add(name)
@@ -100,18 +111,45 @@ def assert_output(output: str, fixtures: Path) -> None:
         fail(f"output is not sorted by path: {names!r}")
 
 
+def assert_table_output(output: str) -> None:
+    lines = output.splitlines()
+    if len(lines) != len(EXPECTED) + 1:
+        fail(
+            f"expected a header and {len(EXPECTED)} table rows, got {len(lines)} lines"
+        )
+    if lines[0].split() != ["PROBABILITY", "VERDICT", "ENCODER", "PATH"]:
+        fail(f"unexpected table header: {lines[0]!r}")
+
+    names = []
+    for line in lines[1:]:
+        matches = [name for name in EXPECTED if name in line]
+        if len(matches) != 1:
+            fail(f"table row does not identify exactly one fixture: {line!r}")
+        name = matches[0]
+        _, expected_verdict, expected_encoder = EXPECTED[name]
+        encoder = expected_encoder or "-"
+        fields = line.split(maxsplit=3)
+        if len(fields) != 4 or fields[1:3] != [expected_verdict, encoder]:
+            fail(f"unexpected table classification for {name}: {line!r}")
+        names.append(name)
+
+    if names != sorted(EXPECTED):
+        fail(f"table output is not sorted by path: {names!r}")
+
+
 def assert_partial_failure(binary: Path, fixtures: Path) -> None:
     short_file = Path(__file__).parent / "fixtures/audio/pcm16.wav"
     result = subprocess.run(
-        [binary, fixtures, short_file],
+        [binary, "-o", "jsonl", fixtures, short_file],
         capture_output=True,
+        check=False,
         text=True,
     )
     sys.stdout.write(result.stdout)
     sys.stderr.write(result.stderr)
     if result.returncode == 0:
         fail("mixed valid/invalid scan unexpectedly succeeded")
-    assert_output(result.stdout, fixtures)
+    assert_jsonl_output(result.stdout, fixtures)
     if str(short_file) not in result.stderr:
         fail("per-file diagnostic did not identify the short input")
     if "audio is shorter than 0.5 seconds" not in result.stderr:
@@ -131,7 +169,8 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix="lossprint-ci-") as directory:
         fixtures = Path(directory)
         download_fixtures(fixtures)
-        assert_output(invoke(binary, [fixtures]), fixtures)
+        assert_table_output(invoke(binary, [fixtures]))
+        assert_jsonl_output(invoke(binary, ["-o", "jsonl", fixtures]), fixtures)
         assert_partial_failure(binary, fixtures)
 
 

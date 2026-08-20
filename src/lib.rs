@@ -5,7 +5,7 @@
 //! spectrogram transforms stay initialized.
 //!
 //! ```no_run
-//! use lossprint::{Codec, Scanner};
+//! use lossprint::{Encoder, Scanner};
 //! use std::fs::File;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -15,7 +15,7 @@
 //! println!("P(transcode) = {:.3}", score.transcode_probability());
 //! println!(
 //!     "P(mp3 | transcode) = {:.3}",
-//!     score.codec_probability(Codec::Mp3)
+//!     score.encoder_probability(Encoder::Mp3)
 //! );
 //! if score.transcode_probability() >= 0.5 {
 //!     println!("transcode");
@@ -28,7 +28,7 @@ pub mod audio;
 mod model;
 mod spectrogram;
 
-use model::{Model, WindowScore, CODEC_COUNT};
+use model::{Model, WindowScore, ENCODER_COUNT};
 use spectrogram::TransformCache;
 use std::fmt;
 
@@ -90,25 +90,26 @@ pub enum Error {
     Score(#[from] ScoreError),
 }
 
-const CODECS: [Codec; CODEC_COUNT] = [
-    Codec::Mp3,
-    Codec::Aac,
-    Codec::AacAt,
-    Codec::FdkAac,
-    Codec::Vorbis,
-    Codec::Opus,
-    Codec::Mp2,
-    Codec::Wma,
-    Codec::Musepack,
+const ENCODERS: [Encoder; ENCODER_COUNT] = [
+    Encoder::Mp3,
+    Encoder::FfmpegAac,
+    Encoder::AacAt,
+    Encoder::FdkAac,
+    Encoder::Vorbis,
+    Encoder::Opus,
+    Encoder::Mp2,
+    Encoder::Wma,
+    Encoder::Musepack,
 ];
 
-/// A source codec or encoder class predicted by the model.
+/// A source encoder class predicted by the model.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Codec {
+#[non_exhaustive]
+pub enum Encoder {
     /// MP3.
     Mp3,
-    /// Generic AAC.
-    Aac,
+    /// FFmpeg's native AAC encoder.
+    FfmpegAac,
     /// Apple AudioToolbox AAC.
     AacAt,
     /// Fraunhofer FDK AAC.
@@ -125,11 +126,26 @@ pub enum Codec {
     Musepack,
 }
 
-impl Codec {
+impl Encoder {
+    /// Return this encoder's stable machine-readable identifier.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Mp3 => "mp3",
+            Self::FfmpegAac => "ffmpeg_aac",
+            Self::AacAt => "aac_at",
+            Self::FdkAac => "fdk_aac",
+            Self::Vorbis => "vorbis",
+            Self::Opus => "opus",
+            Self::Mp2 => "mp2",
+            Self::Wma => "wma",
+            Self::Musepack => "musepack",
+        }
+    }
+
     const fn index(self) -> usize {
         match self {
             Self::Mp3 => 0,
-            Self::Aac => 1,
+            Self::FfmpegAac => 1,
             Self::AacAt => 2,
             Self::FdkAac => 3,
             Self::Vorbis => 4,
@@ -141,27 +157,17 @@ impl Codec {
     }
 }
 
-impl fmt::Display for Codec {
+impl fmt::Display for Encoder {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
-            Self::Mp3 => "mp3",
-            Self::Aac => "aac",
-            Self::AacAt => "aac_at",
-            Self::FdkAac => "fdk_aac",
-            Self::Vorbis => "vorbis",
-            Self::Opus => "opus",
-            Self::Mp2 => "mp2",
-            Self::Wma => "wma",
-            Self::Musepack => "musepack",
-        })
+        formatter.write_str(self.as_str())
     }
 }
 
 /// Model probabilities pooled across a track's analysis windows.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct TrackScore {
     transcode_probability: f32,
-    codec_probabilities: [f32; CODEC_COUNT],
+    encoder_probabilities: [f32; ENCODER_COUNT],
 }
 
 impl TrackScore {
@@ -170,23 +176,25 @@ impl TrackScore {
         self.transcode_probability
     }
 
-    /// Return the probability for one codec or encoder class.
+    /// Return the probability for one encoder class.
     ///
     /// This probability is conditional on the track being a transcode.
-    pub const fn codec_probability(&self, codec: Codec) -> f32 {
-        self.codec_probabilities[codec.index()]
+    pub const fn encoder_probability(&self, encoder: Encoder) -> f32 {
+        self.encoder_probabilities[encoder.index()]
     }
 
-    /// Iterate over every codec and conditional probability in model order.
-    pub fn codec_probabilities(&self) -> impl Iterator<Item = (Codec, f32)> + '_ {
-        CODECS
+    /// Iterate over every encoder and conditional probability.
+    ///
+    /// The iteration order is unspecified and may change with the model.
+    pub fn encoder_probabilities(&self) -> impl Iterator<Item = (Encoder, f32)> + '_ {
+        ENCODERS
             .into_iter()
-            .zip(self.codec_probabilities.iter().copied())
+            .zip(self.encoder_probabilities.iter().copied())
     }
 
-    /// Return the most likely source codec and its conditional probability.
-    pub fn most_likely_codec(&self) -> (Codec, f32) {
-        self.codec_probabilities()
+    /// Return the most likely source encoder and its conditional probability.
+    pub fn most_likely_encoder(&self) -> (Encoder, f32) {
+        self.encoder_probabilities()
             .reduce(|best, candidate| {
                 if candidate.1 > best.1 {
                     candidate
@@ -194,7 +202,7 @@ impl TrackScore {
                     best
                 }
             })
-            .expect("the fixed model has codec classes")
+            .expect("the fixed model has encoder classes")
     }
 }
 
@@ -244,25 +252,25 @@ impl TrackScore {
     fn pool(scores: &[WindowScore]) -> Self {
         debug_assert!(!scores.is_empty());
         let mut transcode_logit_sum = 0.0;
-        let mut codec_log_sums = [0.0; CODEC_COUNT];
+        let mut encoder_log_sums = [0.0; ENCODER_COUNT];
 
         for score in scores {
             let probability = score.transcode_probability.clamp(1e-6, 1.0 - 1e-6);
             transcode_logit_sum += probability.ln() - (-probability).ln_1p();
-            for (sum, probability) in codec_log_sums.iter_mut().zip(score.codec_probabilities) {
+            for (sum, probability) in encoder_log_sums.iter_mut().zip(score.encoder_probabilities) {
                 *sum += probability.clamp(1e-6, 1.0).ln();
             }
         }
 
         let windows = scores.len() as f32;
         let mean_logit = transcode_logit_sum / windows;
-        let mean_logs = codec_log_sums.map(|sum| sum / windows);
+        let mean_logs = encoder_log_sums.map(|sum| sum / windows);
         let max_log = mean_logs.iter().copied().fold(f32::NEG_INFINITY, f32::max);
         let geometric = mean_logs.map(|value| (value - max_log).exp());
-        let codec_total: f32 = geometric.iter().sum();
+        let encoder_total: f32 = geometric.iter().sum();
         Self {
             transcode_probability: 1.0 / (1.0 + (-mean_logit).exp()),
-            codec_probabilities: geometric.map(|probability| probability / codec_total),
+            encoder_probabilities: geometric.map(|probability| probability / encoder_total),
         }
     }
 }
@@ -321,30 +329,48 @@ mod tests {
     }
 
     #[test]
-    fn model_outputs_map_to_codecs() {
+    fn model_outputs_map_to_encoders() {
         let score = TrackScore::pool(&[WindowScore {
             transcode_probability: 0.75,
-            codec_probabilities: [0.02, 0.04, 0.06, 0.08, 0.1, 0.12, 0.14, 0.16, 0.28],
+            encoder_probabilities: [0.02, 0.04, 0.06, 0.08, 0.1, 0.12, 0.14, 0.16, 0.28],
         }]);
 
         assert!((score.transcode_probability() - 0.75).abs() < 1e-6);
         let expected = [
-            (Codec::Mp3, 0.02),
-            (Codec::Aac, 0.04),
-            (Codec::AacAt, 0.06),
-            (Codec::FdkAac, 0.08),
-            (Codec::Vorbis, 0.1),
-            (Codec::Opus, 0.12),
-            (Codec::Mp2, 0.14),
-            (Codec::Wma, 0.16),
-            (Codec::Musepack, 0.28),
+            (Encoder::Mp3, 0.02),
+            (Encoder::FfmpegAac, 0.04),
+            (Encoder::AacAt, 0.06),
+            (Encoder::FdkAac, 0.08),
+            (Encoder::Vorbis, 0.1),
+            (Encoder::Opus, 0.12),
+            (Encoder::Mp2, 0.14),
+            (Encoder::Wma, 0.16),
+            (Encoder::Musepack, 0.28),
         ];
-        for ((actual_codec, actual_probability), (expected_codec, expected_probability)) in
-            score.codec_probabilities().zip(expected)
+        for ((actual_encoder, actual_probability), (expected_encoder, expected_probability)) in
+            score.encoder_probabilities().zip(expected)
         {
-            assert_eq!(actual_codec, expected_codec);
+            assert_eq!(actual_encoder, expected_encoder);
             assert!((actual_probability - expected_probability).abs() < 1e-6);
         }
+    }
+
+    #[test]
+    fn encoder_identifiers_are_stable() {
+        assert_eq!(
+            ENCODERS.map(Encoder::as_str),
+            [
+                "mp3",
+                "ffmpeg_aac",
+                "aac_at",
+                "fdk_aac",
+                "vorbis",
+                "opus",
+                "mp2",
+                "wma",
+                "musepack",
+            ]
+        );
     }
 
     #[test]
@@ -352,11 +378,11 @@ mod tests {
         let score = TrackScore::pool(&[
             WindowScore {
                 transcode_probability: 0.2,
-                codec_probabilities: [0.9, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                encoder_probabilities: [0.9, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
             },
             WindowScore {
                 transcode_probability: 0.8,
-                codec_probabilities: [0.4, 0.6, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                encoder_probabilities: [0.4, 0.6, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
             },
         ]);
 
@@ -365,10 +391,10 @@ mod tests {
         let aac = 0.06_f32.sqrt();
         let floor = 1e-6_f32;
         let total = mp3 + aac + 7.0 * floor;
-        assert!((score.codec_probability(Codec::Mp3) - mp3 / total).abs() < 1e-6);
-        assert!((score.codec_probability(Codec::Aac) - aac / total).abs() < 1e-6);
-        assert!((score.codec_probability(Codec::AacAt) - floor / total).abs() < 1e-8);
-        assert!((score.codec_probability(Codec::Musepack) - floor / total).abs() < 1e-8);
+        assert!((score.encoder_probability(Encoder::Mp3) - mp3 / total).abs() < 1e-6);
+        assert!((score.encoder_probability(Encoder::FfmpegAac) - aac / total).abs() < 1e-6);
+        assert!((score.encoder_probability(Encoder::AacAt) - floor / total).abs() < 1e-8);
+        assert!((score.encoder_probability(Encoder::Musepack) - floor / total).abs() < 1e-8);
     }
 
     #[test]

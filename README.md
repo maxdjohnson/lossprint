@@ -6,13 +6,28 @@ saved in a lossless container.
 
 ```console
 $ lossprint ~/Music
-0.9981214	transcode	mp3	/Users/me/Music/suspect.flac
-0.0042187	clean	-	/Users/me/Music/master.flac
+PROBABILITY  VERDICT    ENCODER     PATH
+0.9981214    transcode  mp3         "/Users/me/Music/suspect.flac"
+0.0042187    clean      -           "/Users/me/Music/master.flac"
 ```
 
-Each stdout row contains the transcode probability, verdict, predicted codec,
-and path separated by tabs. The codec is `-` for clean files because that
-prediction is meaningful only for transcodes. Errors go to stderr.
+The default output is an aligned table for people. The encoder is `-` for clean
+files because that prediction is meaningful only for transcodes. Paths are
+quoted and control characters are escaped. Errors go to stderr.
+
+Use JSON Lines for machine-readable output:
+
+```console
+$ lossprint -o jsonl ~/Music
+{"transcode_probability":0.9981214,"verdict":"transcode","encoder":"mp3","path":"/Users/me/Music/suspect.flac"}
+{"transcode_probability":0.0042187,"verdict":"clean","encoder":null,"path":"/Users/me/Music/master.flac"}
+```
+
+Each JSON object has `transcode_probability`, `verdict`, `encoder`, and `path`.
+`encoder` is `null` for clean files, and JSONL paths must be valid UTF-8. Object
+key order and number formatting are not stable. Encoder strings are the stable
+identifiers returned by `Encoder::as_str`; consumers must accept new identifiers
+and ignore unknown fields because later releases may add either.
 
 At the default `0.5` threshold, the model achieved **less than 2 / 1000** false positive
 rate. Across the evaluated bitrate bands, it detected **99.8–100.0% of MP3 files**
@@ -48,6 +63,7 @@ not follow symlinks.
 lossprint ~/Music /Volumes/archive
 lossprint --threshold 0.7 ~/Music
 lossprint --jobs 4 ~/Music
+lossprint -o jsonl ~/Music
 ```
 
 The CLI's default threshold is `0.5`. Raise it to reduce false positives, or
@@ -77,7 +93,7 @@ Keep a `Scanner` alive while processing multiple tracks so its model and
 spectrogram transforms are reused.
 
 ```rust,no_run
-use lossprint::{Codec, Scanner};
+use lossprint::{Encoder, Scanner};
 use std::fs::File;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -87,15 +103,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("P(transcode) = {:.3}", score.transcode_probability());
     println!(
         "P(mp3 | transcode) = {:.3}",
-        score.codec_probability(Codec::Mp3),
+        score.encoder_probability(Encoder::Mp3),
     );
-
-    let (codec, probability) = score.most_likely_codec();
-    println!("most likely source: {codec} ({probability:.3})");
 
     // The library returns probabilities; the application chooses its threshold.
     if score.transcode_probability() >= 0.5 {
-        println!("transcode");
+        let (encoder, probability) = score.most_likely_encoder();
+        println!("transcode from {encoder} ({probability:.3})");
     }
 
     Ok(())
@@ -114,9 +128,10 @@ without making the decoder library part of lossprint's public API.
 `lossprint::Error` and `lossprint::Result` combine initialization and scoring
 errors for code that has already acquired its media source.
 
-`Codec` covers all nine codec and encoder classes and implements `Display`.
-Use `score.codec_probabilities()` to visit each class and probability in model
-order. These probabilities are conditional on the track being a transcode.
+`Encoder` covers all nine encoder classes and implements `Display`. Use
+`score.encoder_probabilities()` to visit each class and probability. Iteration
+order is unspecified and may change with the model. These probabilities are
+conditional on the track being a transcode.
 
 A scanner can be shared across threads, so applications control track-level
 concurrency themselves.
