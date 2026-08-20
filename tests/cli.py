@@ -9,8 +9,8 @@ import tempfile
 from pathlib import Path
 
 EXPECTED = {
-    "musdb18-hq-1.wav": (0.001858, "clean", "-"),
-    "musdb18-hq-1.mp3.wav": (0.984758, "transcode", "mp3"),
+    "musdb18-hq-1.wav": (0.0006546, "clean", "-"),
+    "musdb18-hq-1.mp3.wav": (0.9997401, "transcode", "mp3"),
 }
 PROBABILITY_TOLERANCE = 5e-4
 

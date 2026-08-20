@@ -3,9 +3,9 @@
 ## lossprint model
 
 The build embeds the
-[lossprint v0.6 ONNX model](https://huggingface.co/maxdj/lossprint/tree/v0.6),
+[lossprint v0.7 ONNX model](https://huggingface.co/maxdj/lossprint/tree/v0.7),
 released under the MIT License. Its SHA-256 digest is
-`1ba4997ecc1cd3379767017abc32140f883c79e74c0d2b6c1ee6628fbd4549e4`.
+`33c74bde418b8330f7e67222afb2ab53706c136281bddd19ec0870b81ddce89a`.
 
 ## Symphonia
 

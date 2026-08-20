@@ -6,9 +6,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const MODEL_URL: &str =
-    "https://huggingface.co/maxdj/lossprint/resolve/14d46be97e6492c39e01a47aa4d549c2575176b1/model.onnx?download=true";
-const MODEL_VERSION: &str = "v0.6";
-const MODEL_SHA256: &str = "1ba4997ecc1cd3379767017abc32140f883c79e74c0d2b6c1ee6628fbd4549e4";
+    "https://huggingface.co/maxdj/lossprint/resolve/c6ca3dd209e39c21b8ce48e235f759ac931cf914/model.onnx?download=true";
+const MODEL_VERSION: &str = "v0.7";
+const MODEL_SHA256: &str = "33c74bde418b8330f7e67222afb2ab53706c136281bddd19ec0870b81ddce89a";
 
 fn cache_path() -> PathBuf {
     let cargo_home = env::var_os("CARGO_HOME")
