@@ -11,12 +11,7 @@ const MODEL_VERSION: &str = "v0.7";
 const MODEL_SHA256: &str = "33c74bde418b8330f7e67222afb2ab53706c136281bddd19ec0870b81ddce89a";
 
 fn cache_path() -> PathBuf {
-    let cargo_home = env::var_os("CARGO_HOME")
-        .map(PathBuf::from)
-        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".cargo")))
-        .or_else(|| env::var_os("USERPROFILE").map(|home| PathBuf::from(home).join(".cargo")))
-        .unwrap_or_else(env::temp_dir);
-    cargo_home
+    PathBuf::from(env::var_os("CARGO_HOME").expect("CARGO_HOME is set"))
         .join("lossprint")
         .join("models")
         .join(MODEL_VERSION)
@@ -55,11 +50,15 @@ fn download(destination: &Path) -> io::Result<()> {
 
     match fs::rename(&temporary, destination) {
         Ok(()) => Ok(()),
-        Err(_) if destination.exists() => {
-            fs::remove_file(temporary)?;
+        // Another build installed the same verified model first.
+        Err(_) if verify(destination).is_ok() => {
+            let _ = fs::remove_file(temporary);
             Ok(())
         }
-        Err(error) => Err(error),
+        Err(error) => {
+            let _ = fs::remove_file(temporary);
+            Err(error)
+        }
     }
 }
 
@@ -98,10 +97,11 @@ fn main() -> io::Result<()> {
         return Ok(());
     }
     let cached = cache_path();
-    if !cached.exists() {
+    if cached.exists() {
+        verify(&cached)?;
+    } else {
         download(&cached)?;
     }
-    verify(&cached)?;
     fs::copy(cached, destination)?;
     Ok(())
 }

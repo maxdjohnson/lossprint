@@ -2,7 +2,7 @@
 
 use rustfft::{num_complex::Complex32, Fft, FftPlanner};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 
 pub(crate) const WINDOW_SECONDS: f32 = 0.5;
 pub(crate) const N_BINS: usize = 513;
@@ -18,16 +18,16 @@ pub(crate) struct TransformCache {
 
 impl TransformCache {
     pub(crate) fn get(&self, sample_rate: u32) -> Arc<Transform> {
+        // Recovering beats poisoning the cache for the process's lifetime.
         let mut transforms = self
             .transforms
             .lock()
-            .expect("transform cache mutex poisoned");
-        if let Some(transform) = transforms.get(&sample_rate) {
-            return Arc::clone(transform);
-        }
-        let transform = Arc::new(Transform::new(sample_rate));
-        transforms.insert(sample_rate, Arc::clone(&transform));
-        transform
+            .unwrap_or_else(PoisonError::into_inner);
+        Arc::clone(
+            transforms
+                .entry(sample_rate)
+                .or_insert_with(|| Arc::new(Transform::new(sample_rate))),
+        )
     }
 }
 

@@ -134,6 +134,7 @@ const ENCODERS: [Encoder; ENCODER_COUNT] = [
 /// A source encoder class predicted by the model.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[non_exhaustive]
+#[repr(usize)]
 pub enum Encoder {
     /// MP3.
     Mp3,
@@ -173,17 +174,7 @@ impl Encoder {
     }
 
     const fn index(self) -> usize {
-        match self {
-            Self::Mp3 => 0,
-            Self::FfmpegAac => 1,
-            Self::AacAt => 2,
-            Self::FdkAac => 3,
-            Self::Vorbis => 4,
-            Self::Opus => 5,
-            Self::Mp2 => 6,
-            Self::Wma => 7,
-            Self::Musepack => 8,
-        }
+        self as usize
     }
 }
 
@@ -445,6 +436,13 @@ mod tests {
                 "musepack",
             ]
         );
+    }
+
+    #[test]
+    fn encoder_discriminants_match_their_position() {
+        for (position, encoder) in ENCODERS.into_iter().enumerate() {
+            assert_eq!(encoder.index(), position);
+        }
     }
 
     #[test]

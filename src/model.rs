@@ -22,14 +22,10 @@ pub(crate) struct Model {
 impl Model {
     pub(crate) fn new() -> TractResult<Self> {
         let mut cursor = Cursor::new(MODEL);
-        let model = tract_onnx::onnx()
-            .model_for_read(&mut cursor)
-            .map_err(|error| error.context("could not parse the embedded ONNX model"))?
-            .into_optimized()
-            .map_err(|error| error.context("could not optimize the embedded ONNX model"))?;
-        let runnable = model
-            .into_runnable()
-            .map_err(|error| error.context("could not prepare the embedded ONNX model"))?;
+        let runnable = tract_onnx::onnx()
+            .model_for_read(&mut cursor)?
+            .into_optimized()?
+            .into_runnable()?;
         Ok(Self { runnable })
     }
 
@@ -38,10 +34,7 @@ impl Model {
         let input = tract_ndarray::Array4::from_shape_vec((batch, 2, N_BINS, N_FRAMES), input)
             .expect("window-aligned input fits the model shape")
             .into_tensor();
-        let outputs = self
-            .runnable
-            .run(tvec!(input.into()))
-            .map_err(|error| error.context("could not run the ONNX model"))?;
+        let outputs = self.runnable.run(tvec!(input.into()))?;
         let [transcode, encoders, _bandwidth] = outputs.as_slice() else {
             unreachable!("embedded model has exactly three outputs")
         };
@@ -54,16 +47,6 @@ impl Model {
         let encoders = encoders
             .as_slice()
             .expect("tract outputs contiguous encoder probabilities");
-        assert_eq!(
-            transcode.len(),
-            batch,
-            "embedded model returns one transcode probability per window"
-        );
-        assert_eq!(
-            encoders.len(),
-            batch * ENCODER_COUNT,
-            "embedded model returns every encoder probability per window"
-        );
         Ok(transcode
             .iter()
             .zip(encoders.chunks_exact(ENCODER_COUNT))
