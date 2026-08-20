@@ -1,78 +1,26 @@
 //! Native-rate decoding for lossless containers.
 
 use crate::{validate, DecodeError, ScoreError};
-use std::io::{Read, Seek, SeekFrom};
-use std::sync::{Mutex, PoisonError};
+use std::fs::File;
 use symphonia::core::audio::GenericAudioBufferRef;
 use symphonia::core::codecs::audio::well_known::{CODEC_ID_PCM_ALAW, CODEC_ID_PCM_MULAW};
 use symphonia::core::codecs::audio::AudioDecoderOptions;
 use symphonia::core::formats::TrackType;
-use symphonia::core::io::{MediaSource as SymphoniaMediaSource, MediaSourceStream};
+use symphonia::core::io::MediaSourceStream;
 use symphonia::default::{get_codecs, get_probe};
 
 pub(crate) const MAX_SECONDS: usize = 20;
 pub(crate) const MIN_SAMPLE_RATE: u32 = 8_000;
 pub(crate) const MAX_SAMPLE_RATE: u32 = 384_000;
 
-/// A seekable byte source containing one audio file.
-pub trait MediaSource: Read + Seek + Send {}
-
-impl<T: ?Sized> MediaSource for T where T: Read + Seek + Send {}
-
 pub(crate) struct Clip {
     pub(crate) channels: Vec<Vec<f32>>,
     pub(crate) sample_rate: u32,
 }
 
-/// Adapt a [`Send`] reader into the `Send + Sync` source Symphonia requires.
-///
-/// Symphonia's own `MediaSource` demands [`Sync`] even though the stream is only
-/// ever driven from one thread. [`Mutex`] is [`Sync`] for any [`Send`] payload,
-/// and `get_mut` reaches the reader through `&mut self` without taking the lock,
-/// so the wrapper costs nothing at runtime. `std::sync::Exclusive` expresses
-/// this directly but is still unstable.
-struct SyncSource<S>(Mutex<S>);
-
-impl<S> SyncSource<S> {
-    fn get(&mut self) -> &mut S {
-        // Never locked, so never actually poisoned.
-        self.0.get_mut().unwrap_or_else(PoisonError::into_inner)
-    }
-}
-
-impl<S: Read> Read for SyncSource<S> {
-    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
-        self.get().read(buffer)
-    }
-
-    fn read_vectored(&mut self, buffers: &mut [std::io::IoSliceMut<'_>]) -> std::io::Result<usize> {
-        self.get().read_vectored(buffers)
-    }
-}
-
-impl<S: Seek> Seek for SyncSource<S> {
-    fn seek(&mut self, position: SeekFrom) -> std::io::Result<u64> {
-        self.get().seek(position)
-    }
-}
-
-impl<S: Read + Seek + Send> SymphoniaMediaSource for SyncSource<S> {
-    fn is_seekable(&self) -> bool {
-        true
-    }
-
-    fn byte_len(&self) -> Option<u64> {
-        None
-    }
-}
-
 /// Decode at most 20 seconds without resampling, downmixing, or requantizing.
-///
-/// Deliberately non-generic, since Symphonia boxes the source into a trait
-/// object anyway.
-pub(crate) fn decode(source: &mut dyn MediaSource) -> Result<Clip, ScoreError> {
-    let stream =
-        MediaSourceStream::new(Box::new(SyncSource(Mutex::new(source))), Default::default());
+pub(crate) fn decode_file(file: File) -> Result<Clip, ScoreError> {
+    let stream = MediaSourceStream::new(Box::new(file), Default::default());
 
     let mut format = get_probe()
         .probe(
@@ -150,9 +98,7 @@ fn malformed(error: impl std::error::Error + Send + Sync + 'static) -> ScoreErro
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::Cell;
     use std::fs::File;
-    use std::io::Cursor;
     use std::path::{Path, PathBuf};
 
     fn fixture(name: &str) -> PathBuf {
@@ -162,7 +108,7 @@ mod tests {
     }
 
     fn decode_fixture(name: &str) -> Clip {
-        decode(&mut File::open(fixture(name)).unwrap()).unwrap()
+        decode_file(File::open(fixture(name)).unwrap()).unwrap()
     }
 
     #[test]
@@ -201,45 +147,5 @@ mod tests {
 
         assert_eq!(clip.sample_rate, 32_000);
         assert_eq!(clip.channels, vec![vec![0.5, -0.25]]);
-    }
-
-    #[test]
-    fn decodes_an_in_memory_source() {
-        let bytes = std::fs::read(fixture("pcm16.wav")).unwrap();
-        let clip = decode(&mut Cursor::new(bytes.as_slice())).unwrap();
-
-        assert_eq!(clip.sample_rate, 44_100);
-        assert_eq!(clip.channels.len(), 2);
-    }
-
-    /// A `Send` but `!Sync` reader, which Symphonia's own trait would reject.
-    struct NotSync {
-        inner: Cursor<Vec<u8>>,
-        reads: Cell<usize>,
-    }
-
-    impl Read for NotSync {
-        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
-            self.reads.set(self.reads.get() + 1);
-            self.inner.read(buffer)
-        }
-    }
-
-    impl Seek for NotSync {
-        fn seek(&mut self, position: SeekFrom) -> std::io::Result<u64> {
-            self.inner.seek(position)
-        }
-    }
-
-    #[test]
-    fn decodes_a_send_but_not_sync_source() {
-        let mut source = NotSync {
-            inner: Cursor::new(std::fs::read(fixture("pcm16.wav")).unwrap()),
-            reads: Cell::new(0),
-        };
-        let clip = decode(&mut source).unwrap();
-
-        assert_eq!(clip.sample_rate, 44_100);
-        assert!(source.reads.get() > 0);
     }
 }

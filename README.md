@@ -94,7 +94,7 @@ use std::fs::File;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let scanner = Scanner::new()?;
-    let score = scanner.score(File::open("track.flac")?)?;
+    let score = scanner.score_file(File::open("track.flac")?)?;
 
     println!("P(transcode) = {:.3}", score.transcode_probability());
     println!(
@@ -112,9 +112,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-`Scanner::score` accepts any seekable `MediaSource`, including `File`, `Cursor`,
-and other `Read + Seek + Send` types. If you already hold decoded PCM, skip the
-decoder with `Scanner::score_samples`, which takes one planar slice per channel.
+`Scanner::score_file` takes a `File` and returns probabilities; the
+application chooses its own threshold.
 
 A scanner can be shared across threads, so applications control track-level
 concurrency themselves.

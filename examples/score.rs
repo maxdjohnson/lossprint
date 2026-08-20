@@ -8,7 +8,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let scanner = Scanner::new()?;
-    let score = scanner.score(File::open(path)?)?;
+    let score = scanner.score_file(File::open(path)?)?;
     println!("transcode\t{:.7}", score.transcode_probability());
     for (encoder, probability) in score.encoder_probabilities() {
         println!("{encoder}\t{probability:.7}");

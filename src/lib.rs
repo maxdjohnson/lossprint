@@ -10,7 +10,7 @@
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let scanner = Scanner::new()?;
-//! let score = scanner.score(File::open("track.flac")?)?;
+//! let score = scanner.score_file(File::open("track.flac")?)?;
 //!
 //! println!("P(transcode) = {:.3}", score.transcode_probability());
 //! println!(
@@ -24,21 +24,18 @@
 //! # }
 //! ```
 //!
-//! Callers holding decoded PCM already can skip the decoder entirely with
-//! [`Scanner::score_samples`].
 
 mod audio;
 mod model;
 mod spectrogram;
 
-use audio::{MAX_SAMPLE_RATE, MAX_SECONDS, MIN_SAMPLE_RATE};
+use audio::{MAX_SAMPLE_RATE, MIN_SAMPLE_RATE};
 use model::{Model, WindowScore, ENCODER_COUNT};
 use spectrogram::{TransformCache, WINDOW_SECONDS};
 use std::fmt;
+use std::fs::File;
 use std::str::FromStr;
 use tract_onnx::prelude::TractError;
-
-pub use audio::MediaSource;
 
 /// A failure reported by the model runtime.
 #[derive(Debug)]
@@ -268,53 +265,38 @@ impl Scanner {
         })
     }
 
-    /// Score one WAV, AIFF, or FLAC media source.
-    pub fn score<S: MediaSource>(&self, mut source: S) -> Result<TrackScore, ScoreError> {
-        self.score_dyn(&mut source)
-    }
-
-    /// Score planar PCM that has already been decoded.
+    /// Score one WAV, AIFF, or FLAC file.
     ///
-    /// `channels` holds one slice per channel, each already at `sample_rate`
-    /// and unresampled. Callers holding a `Vec<Vec<f32>>` can pass
-    /// `&channels.iter().map(Vec::as_slice).collect::<Vec<_>>()`.
-    ///
-    /// Like [`Scanner::score`], only the first 20 seconds are examined. Stereo
-    /// input is truncated to its shorter channel.
-    pub fn score_samples(
-        &self,
-        channels: &[&[f32]],
-        sample_rate: u32,
-    ) -> Result<TrackScore, ScoreError> {
-        self.run(channels, sample_rate)
+    /// Only the first 20 seconds are decoded.
+    pub fn score_file(&self, file: File) -> Result<TrackScore, ScoreError> {
+        self.score_clip(audio::decode_file(file)?)
     }
 
-    fn score_dyn(&self, source: &mut dyn MediaSource) -> Result<TrackScore, ScoreError> {
-        let clip = audio::decode(source)?;
-        let channels = clip.channels.iter().map(Vec::as_slice).collect::<Vec<_>>();
-        self.run(&channels, clip.sample_rate)
-    }
-
-    fn run(&self, channels: &[&[f32]], sample_rate: u32) -> Result<TrackScore, ScoreError> {
-        validate(sample_rate, channels.len())?;
-        let frames = channels
+    /// Score decoded audio. Non-generic, so the spectrogram and inference code
+    /// is generated once rather than once per reader type.
+    fn score_clip(&self, clip: audio::Clip) -> Result<TrackScore, ScoreError> {
+        // `decode` validated the sample rate and channel count, and truncated
+        // every channel to the first 20 seconds.
+        let frames = clip
+            .channels
             .iter()
             .map(|channel| channel.len())
             .min()
-            .unwrap_or(0)
-            .min(MAX_SECONDS * sample_rate as usize);
-        let cropped = channels
+            .unwrap_or(0);
+        let cropped = clip
+            .channels
             .iter()
             .map(|channel| &channel[..frames])
             .collect::<Vec<_>>();
 
-        let offsets = spectrogram::window_offsets(frames, spectrogram::window_len(sample_rate));
+        let offsets =
+            spectrogram::window_offsets(frames, spectrogram::window_len(clip.sample_rate));
         if offsets.is_empty() {
             return Err(ScoreError::TooShort);
         }
         let windows = self
             .transforms
-            .get(sample_rate)
+            .get(clip.sample_rate)
             .write_windows(&cropped, &offsets);
         let scores = self.model.run(windows).map_err(ModelError)?;
         Ok(TrackScore::pool(&scores))

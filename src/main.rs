@@ -81,7 +81,7 @@ fn main() -> Result<()> {
             .par_iter()
             .map(|path| -> Result<_> {
                 let source = File::open(path)?;
-                Ok(scanner.score(source)?)
+                Ok(scanner.score_file(source)?)
             })
             .collect::<Vec<_>>()
     });
