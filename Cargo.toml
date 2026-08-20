@@ -14,7 +14,7 @@ categories = ["multimedia::audio", "command-line-utilities"]
 publish = ["crates-io"]
 
 [features]
-default = ["cli"]
+default = []
 cli = [
     "dep:anyhow",
     "dep:clap",

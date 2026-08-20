@@ -33,7 +33,7 @@ binaries from the [latest GitHub release](https://github.com/maxdjohnson/losspri
 ### Cargo
 
 ```bash
-cargo install lossprint
+cargo install lossprint --features cli
 ```
 
 ## Use
@@ -81,6 +81,9 @@ Add the crate to an application:
 ```bash
 cargo add lossprint
 ```
+
+The library has no default features; enable `cli` only when building the
+command-line executable.
 
 Keep a `Scanner` alive while processing multiple tracks so its model and
 spectrogram transforms are reused.
@@ -138,5 +141,5 @@ scoring therefore needs no network. Scoring only requires `&Scanner`.
 Install Rust 1.97.1 or newer and `curl`, then run:
 
 ```bash
-cargo build --release
+cargo build --release --features cli
 ```

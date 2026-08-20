@@ -29,7 +29,7 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Check library-only feature set
-        run: cargo test --locked --no-default-features --all-targets
+        run: cargo test --locked --all-targets
       - name: Lint
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - name: Run unit tests
@@ -40,6 +40,23 @@ jobs:
         run: cargo doc --locked --no-deps --all-features
       - name: Verify crates.io package
         run: cargo package --locked
+
+  semver:
+    name: Public API compatibility
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - name: Check public API compatibility
+        uses: obi1kenobi/cargo-semver-checks-action@v2
+        env:
+          DOCS_RS: 1
+        with:
+          package: lossprint
+          feature-group: only-explicit-features
+          # Keep the API source-compatible even while preparing a major release.
+          # An intentional breaking release must explicitly change this gate.
+          release-type: minor
 
   build:
     name: Build and integration test (${{ matrix.target }})
@@ -68,7 +85,7 @@ jobs:
       - name: Install Rust target
         run: rustup target add "${{ matrix.target }}"
       - name: Build release binary
-        run: cargo build --locked --release --target "${{ matrix.target }}"
+        run: cargo build --locked --release --features cli --target "${{ matrix.target }}"
       - name: Package Unix release artifact
         if: runner.os != 'Windows'
         shell: bash
@@ -146,6 +163,7 @@ jobs:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs:
       - unit
+      - semver
       - build
     runs-on: ubuntu-24.04
     timeout-minutes: 10
