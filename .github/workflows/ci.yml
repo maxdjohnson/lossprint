@@ -90,11 +90,9 @@ jobs:
         with:
           package: lossprint
           feature-group: only-explicit-features
-          # The 1.0 release intentionally reshapes the error types, relaxes
-          # `MediaSource`, and makes the `audio` module private.
-          # Restore `minor` immediately after publishing 1.0, or this guard
-          # permits silent breakage for the whole 1.x line.
-          release-type: major
+          # Keep every post-1.0 change compatible with the latest published
+          # release throughout the 1.x line.
+          release-type: minor
 
   build:
     name: Build and integration test (${{ matrix.target }})
