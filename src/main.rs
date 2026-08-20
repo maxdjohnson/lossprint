@@ -4,6 +4,7 @@ use anyhow::{bail, Context, Result};
 use clap::Parser;
 use lossprint::Scanner;
 use rayon::prelude::*;
+use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
@@ -53,7 +54,10 @@ fn main() -> Result<()> {
     let results = pool.install(|| {
         files
             .par_iter()
-            .map(|path| scanner.score_file(path))
+            .map(|path| -> Result<_> {
+                let source = File::open(path)?;
+                Ok(scanner.score(source)?)
+            })
             .collect::<Vec<_>>()
     });
 

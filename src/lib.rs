@@ -6,10 +6,11 @@
 //!
 //! ```no_run
 //! use lossprint::{Codec, Scanner};
+//! use std::fs::File;
 //!
-//! # fn main() -> lossprint::Result<()> {
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let scanner = Scanner::new()?;
-//! let score = scanner.score_file("track.flac")?;
+//! let score = scanner.score(File::open("track.flac")?)?;
 //!
 //! println!("P(transcode) = {:.3}", score.transcode_probability());
 //! println!(
@@ -23,14 +24,15 @@
 //! # }
 //! ```
 
-mod audio;
+pub mod audio;
 mod model;
 mod spectrogram;
 
 use model::{Model, WindowScore, CODEC_COUNT};
 use spectrogram::TransformCache;
 use std::fmt;
-use std::path::Path;
+
+pub use audio::MediaSource;
 
 /// A convenience result for code that both constructs and uses a scanner.
 pub type Result<T> = std::result::Result<T, Error>;
@@ -55,28 +57,22 @@ impl InitializationError {
     }
 }
 
-/// A failure while scoring an audio file.
+/// A failure while scoring an audio media source.
 ///
-/// The variants distinguish errors tied to one input from failures in the
-/// shared model runtime. Backend-specific errors remain available through
-/// [`std::error::Error::source`] without becoming part of this crate's public
-/// API.
+/// Backend-specific errors remain available through [`std::error::Error::source`]
+/// without becoming part of this crate's public API.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum ScoreError {
-    /// The input file could not be decoded or prepared.
+    /// The source could not be decoded or prepared.
     #[error("{0}")]
-    Audio(#[source] Box<dyn std::error::Error + Send + Sync + 'static>),
+    Audio(#[from] audio::Error),
     /// The model could not score prepared audio.
     #[error("model inference failed: {0}")]
     Inference(#[source] Box<dyn std::error::Error + Send + Sync + 'static>),
 }
 
 impl ScoreError {
-    fn audio(error: impl std::error::Error + Send + Sync + 'static) -> Self {
-        Self::Audio(Box::new(error))
-    }
-
     fn inference(error: impl std::error::Error + Send + Sync + 'static) -> Self {
         Self::Inference(Box::new(error))
     }
@@ -218,27 +214,10 @@ impl Scanner {
         })
     }
 
-    /// Score one WAV, AIFF, or FLAC file.
-    pub fn score_file(
-        &self,
-        path: impl AsRef<Path>,
-    ) -> std::result::Result<TrackScore, ScoreError> {
-        let windows = prepare(path.as_ref(), &self.transforms).map_err(ScoreError::audio)?;
+    /// Score one WAV, AIFF, or FLAC media source.
+    pub fn score<S: MediaSource>(&self, source: S) -> std::result::Result<TrackScore, ScoreError> {
+        let windows = prepare(source, &self.transforms)?;
         self.score_windows(&windows)
-    }
-
-    /// Score files serially in input order.
-    ///
-    /// Each track's windows are scored together in one model call. Every input
-    /// produces one same-index result containing its [`ScoreError`], if any.
-    pub fn score_files<P>(&self, files: &[P]) -> Vec<std::result::Result<TrackScore, ScoreError>>
-    where
-        P: AsRef<Path>,
-    {
-        files
-            .iter()
-            .map(|path| self.score_file(path.as_ref()))
-            .collect()
     }
 
     fn score_windows(&self, windows: &[f32]) -> std::result::Result<TrackScore, ScoreError> {
@@ -247,11 +226,11 @@ impl Scanner {
     }
 }
 
-fn prepare(
-    path: &Path,
+fn prepare<S: MediaSource>(
+    source: S,
     transforms: &TransformCache,
 ) -> std::result::Result<Vec<f32>, audio::Error> {
-    let clip = audio::decode(path)?;
+    let clip = audio::decode(source)?;
     let crop_len = clip.sample_rate as usize / 2;
     let offsets = spectrogram::window_offsets(clip.channels[0].len(), crop_len);
     if offsets.is_empty() {
@@ -300,6 +279,7 @@ mod tests {
     fn public_errors_preserve_backend_sources() {
         fn assert_public_error<T: std::error::Error + Send + Sync + 'static>() {}
         assert_public_error::<InitializationError>();
+        assert_public_error::<audio::Error>();
         assert_public_error::<ScoreError>();
         assert_public_error::<Error>();
 
@@ -315,13 +295,18 @@ mod tests {
             "backend detail"
         );
 
-        let audio = ScoreError::audio(BackendError);
+        let audio = ScoreError::from(audio::Error::Probe(Box::new(BackendError)));
         assert!(matches!(&audio, ScoreError::Audio(_)));
-        assert_eq!(audio.to_string(), "backend detail");
         assert_eq!(
-            std::error::Error::source(&audio).unwrap().to_string(),
-            "backend detail"
+            audio.to_string(),
+            "could not recognize audio format: backend detail"
         );
+        let audio_source = std::error::Error::source(&audio).unwrap();
+        assert_eq!(
+            audio_source.to_string(),
+            "could not recognize audio format: backend detail"
+        );
+        assert_eq!(audio_source.source().unwrap().to_string(), "backend detail");
 
         let inference = ScoreError::inference(BackendError);
         assert!(matches!(&inference, ScoreError::Inference(_)));
@@ -390,5 +375,13 @@ mod tests {
     fn scanner_is_send_and_sync() {
         fn assert_send_and_sync<T: Send + Sync>() {}
         assert_send_and_sync::<Scanner>();
+    }
+
+    #[test]
+    fn common_seekable_readers_are_media_sources() {
+        fn assert_media_source<T: MediaSource>() {}
+        assert_media_source::<std::fs::File>();
+        assert_media_source::<std::io::Cursor<Vec<u8>>>();
+        assert_media_source::<std::io::BufReader<std::fs::File>>();
     }
 }

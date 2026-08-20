@@ -44,10 +44,11 @@ spectrogram transforms are reused.
 
 ```rust,no_run
 use lossprint::{Codec, Scanner};
+use std::fs::File;
 
-fn main() -> lossprint::Result<()> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let scanner = Scanner::new()?;
-    let score = scanner.score_file("track.flac")?;
+    let score = scanner.score(File::open("track.flac")?)?;
 
     println!("P(transcode) = {:.3}", score.transcode_probability());
     println!(
@@ -67,23 +68,24 @@ fn main() -> lossprint::Result<()> {
 }
 ```
 
-`Scanner::new` returns `InitializationError`; scoring methods return
-`ScoreError`. `ScoreError::Audio` identifies a problem with one input, while
-`ScoreError::Inference` identifies a model-runtime failure. Their underlying
-decoder and inference errors are exposed through the standard error source
-chain without making those libraries part of lossprint's public API.
-`lossprint::Error` and `lossprint::Result` are convenience umbrella types for
-code, like the example above, that performs both initialization and scoring.
+`Scanner::score` accepts any seekable `MediaSource`, including `File`, `Cursor`,
+and other `Read + Seek + Send + Sync` types. The caller opens the source, so
+file-opening errors remain outside lossprint's scoring API. Read or seek
+failures after scoring starts are reported as audio errors.
+
+`Scanner::new` returns `InitializationError`; `Scanner::score` returns either
+`ScoreError::Audio(audio::Error)` or `ScoreError::Inference`. Decoder-specific
+sources inside `audio::Error` are boxed, preserving their diagnostic chain
+without making the decoder library part of lossprint's public API.
+`lossprint::Error` and `lossprint::Result` combine initialization and scoring
+errors for code that has already acquired its media source.
 
 `Codec` covers all nine codec and encoder classes and implements `Display`.
 Use `score.codec_probabilities()` to visit each class and probability in model
 order. These probabilities are conditional on the track being a transcode.
 
-`Scanner::score_files` scores files serially in input order. Each item is a
-success or failure for the file at the same index, and each track's analysis
-windows are scored together in one model call. Input, decoding, and inference
-errors are reported on the affected item. A scanner can be shared across
-threads, so applications control track-level concurrency themselves.
+A scanner can be shared across threads, so applications control track-level
+concurrency themselves.
 
 The build downloads the pinned v0.6 model, verifies its SHA-256 checksum,
 caches it under Cargo's home directory, and embeds it in the program. Runtime
