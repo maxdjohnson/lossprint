@@ -8,7 +8,7 @@ use crate::spectrogram::{N_BINS, N_FRAMES, WINDOW_VALUES};
 
 pub(crate) const ENCODER_COUNT: usize = 9;
 
-const MODEL: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/model.onnx"));
+const MODEL: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/model/model.onnx"));
 
 pub(crate) struct WindowScore {
     pub transcode_probability: f32,

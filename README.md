@@ -118,14 +118,30 @@ application chooses its own threshold.
 A scanner can be shared across threads, so applications control track-level
 concurrency themselves.
 
-The build downloads the pinned v0.7 model, verifies its SHA-256 checksum,
-caches it under Cargo's home directory, and embeds it in the program. Runtime
-scoring therefore needs no network. Scoring only requires `&Scanner`.
+The crate contains the pinned v0.7 model and embeds it directly in programs
+that use `lossprint`. Building from a published or vendored crate and runtime
+scoring therefore need no separate model download. Scoring only requires
+`&Scanner`.
 
 ## Build
 
-Install Rust 1.97.1 or newer and `curl`, then run:
+Install Rust 1.97.1 or newer. A published crate already contains the model, so
+it builds normally (and with `--offline` when the ordinary Rust dependencies
+are available locally):
 
 ```bash
 cargo build --release --features cli
 ```
+
+A Git checkout deliberately does not contain the model. Stage the ignored,
+checksum-verified model once before building or packaging that checkout:
+
+```bash
+python tools/fetch_model.py
+cargo build --release --features cli
+```
+
+Cargo treats the intentionally untracked model as a package change. After
+confirming the Git worktree is clean, maintainers can create or publish the
+self-contained crate with `cargo package --locked --allow-dirty` or
+`cargo publish --locked --allow-dirty`.

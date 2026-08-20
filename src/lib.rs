@@ -256,7 +256,7 @@ impl fmt::Debug for Scanner {
 }
 
 impl Scanner {
-    /// Construct a scanner using the downloaded-and-embedded model.
+    /// Construct a scanner using the embedded model.
     pub fn new() -> Result<Self, InitializationError> {
         let model = Model::new().map_err(ModelError)?;
         Ok(Self {

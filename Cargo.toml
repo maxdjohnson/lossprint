@@ -12,6 +12,24 @@ documentation = "https://docs.rs/lossprint"
 keywords = ["audio", "lossless", "transcode", "detection", "onnx"]
 categories = ["multimedia::audio", "command-line-utilities"]
 publish = ["crates-io"]
+include = [
+    "/Cargo.lock",
+    "/Cargo.toml",
+    "/LICENSE",
+    "/README.md",
+    "/THIRD_PARTY.md",
+    "/build.rs",
+    "/examples/**",
+    "/model/model.onnx",
+    "/rust-toolchain.toml",
+    "/src/**",
+    "/tests/*.py",
+    "/tests/*.rs",
+    "/tests/fixtures/audio/*.aiff",
+    "/tests/fixtures/audio/*.flac",
+    "/tests/fixtures/audio/*.md",
+    "/tests/fixtures/audio/*.wav",
+]
 
 [features]
 default = []

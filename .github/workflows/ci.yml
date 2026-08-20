@@ -26,6 +26,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
+      - name: Stage model
+        run: python tools/fetch_model.py
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Check library-only feature set
@@ -39,7 +41,39 @@ jobs:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --locked --no-deps --all-features
       - name: Verify crates.io package
-        run: cargo package --locked
+        shell: bash
+        run: |
+          set -euo pipefail
+          model="model/model.onnx"
+          expected_sha="33c74bde418b8330f7e67222afb2ab53706c136281bddd19ec0870b81ddce89a"
+
+          test -z "$(git status --porcelain --untracked-files=all)"
+          test -z "$(git ls-files -- '*.onnx')"
+          git check-ignore -q -- "${model}"
+          echo "${expected_sha}  ${model}" | sha256sum --check --strict
+
+          # The explicit package allowlist includes the intentionally untracked
+          # model, so Cargo requires --allow-dirty even though Git is clean.
+          cargo package --locked --offline --allow-dirty
+          version="$(cargo metadata --locked --offline --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "lossprint") | .version')"
+          archive="target/package/lossprint-${version}.crate"
+          member="lossprint-${version}/${model}"
+
+          tar -tzf "${archive}" | grep -Fx "${member}"
+          test "$(tar -xOzf "${archive}" "${member}" | sha256sum | cut -d ' ' -f 1)" = "${expected_sha}"
+          test "$(stat -c %s "${archive}")" -lt 10485760
+
+          cargo test \
+            --manifest-path "target/package/lossprint-${version}/Cargo.toml" \
+            --locked \
+            --offline \
+            --test public_api
+          cargo build \
+            --manifest-path "target/package/lossprint-${version}/Cargo.toml" \
+            --locked \
+            --offline \
+            --release \
+            --features cli
 
   semver:
     name: Public API compatibility
@@ -47,6 +81,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
+      - name: Stage model
+        run: python tools/fetch_model.py
       - name: Check public API compatibility
         uses: obi1kenobi/cargo-semver-checks-action@v2
         env:
@@ -84,6 +120,8 @@ jobs:
       TARGET: ${{ matrix.target }}
     steps:
       - uses: actions/checkout@v6
+      - name: Stage model
+        run: python tools/fetch_model.py
       - name: Install Rust target
         run: rustup target add "${{ matrix.target }}"
       - name: Build release binary

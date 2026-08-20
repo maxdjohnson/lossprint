@@ -143,7 +143,7 @@ def assert_partial_failure(binary: Path, fixtures: Path) -> None:
     assert_jsonl_output(result.stdout, fixtures)
     for message in (
         str(short_file),
-        "audio is shorter than 0.5 seconds",
+        "audio is shorter than the 0.5-second analysis window",
         "could not scan 1 file(s)",
     ):
         if message not in result.stderr:
