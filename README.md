@@ -1,8 +1,7 @@
 # lossprint
 
-`lossprint` is a Rust library and command-line tool that scans WAV, AIFF, and
-FLAC files for evidence that they were decoded from a lossy source before being
-saved in a lossless container.
+`lossprint` is a Rust command-line tool and library that scans WAV, AIFF, and
+FLAC files for evidence that they were decoded from a lossy source.
 
 ```console
 $ lossprint ~/Music
@@ -11,25 +10,7 @@ PROBABILITY  VERDICT    ENCODER     PATH
 0.0042187    clean      -           "/Users/me/Music/master.flac"
 ```
 
-The default output is an aligned table for people. The encoder is `-` for clean
-files because that prediction is meaningful only for transcodes. Paths are
-quoted and control characters are escaped. Errors go to stderr.
-
-Use JSON Lines for machine-readable output:
-
-```console
-$ lossprint -o jsonl ~/Music
-{"transcode_probability":0.9981214,"verdict":"transcode","encoder":"mp3","path":"/Users/me/Music/suspect.flac"}
-{"transcode_probability":0.0042187,"verdict":"clean","encoder":null,"path":"/Users/me/Music/master.flac"}
-```
-
-Each JSON object has `transcode_probability`, `verdict`, `encoder`, and `path`.
-`encoder` is `null` for clean files, and JSONL paths must be valid UTF-8. Object
-key order and number formatting are not stable. Encoder strings are the stable
-identifiers returned by `Encoder::as_str`; consumers must accept new identifiers
-and ignore unknown fields because later releases may add either.
-
-At the default `0.5` threshold, the model achieved **less than 2 / 1000** false positive
+At the default `0.5` threshold, the model achieves **less than 2 / 1000** false positive
 rate. Across the evaluated bitrate bands, it detected **99.8–100.0% of MP3 files**
 and **92.0–99.7% of AAC files**. See the
 [v0.7 model card](https://huggingface.co/maxdj/lossprint) for more model details.
@@ -65,6 +46,17 @@ lossprint --threshold 0.7 ~/Music
 lossprint --jobs 4 ~/Music
 lossprint -o jsonl ~/Music
 ```
+
+Outputs a table by default; use -o jsonl for machine-readable output:
+
+```console
+$ lossprint -o jsonl ~/Music
+{"transcode_probability":0.9981214,"verdict":"transcode","encoder":"mp3","path":"/Users/me/Music/suspect.flac"}
+{"transcode_probability":0.0042187,"verdict":"clean","encoder":null,"path":"/Users/me/Music/master.flac"}
+```
+
+Each JSON object has `transcode_probability`, `verdict`, `encoder`, and `path`.
+`encoder` is `null` for clean files, and JSONL paths must be valid UTF-8.
 
 The CLI's default threshold is `0.5`. Raise it to reduce false positives, or
 lower it to favor recall.
