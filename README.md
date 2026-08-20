@@ -117,12 +117,9 @@ and other `Read + Seek + Send + Sync` types. The caller opens the source, so
 file-opening errors remain outside lossprint's scoring API. Read or seek
 failures after scoring starts are reported as audio errors.
 
-`Scanner::new` returns `InitializationError`; `Scanner::score` returns either
-`ScoreError::Audio(audio::Error)` or `ScoreError::Inference`. Decoder-specific
-sources inside `audio::Error` are boxed, preserving their diagnostic chain
-without making the decoder library part of lossprint's public API.
-`lossprint::Error` and `lossprint::Result` combine initialization and scoring
-errors for code that has already acquired its media source.
+`Scanner::new` reports model initialization failures. `Scanner::score`
+distinguishes input and decoding failures (`ScoreError::Audio`) from model
+runtime failures (`ScoreError::Inference`).
 
 `Encoder` covers all nine encoder classes and implements `Display`. Use
 `score.encoder_probabilities()` to visit each class and probability. Iteration

@@ -1,8 +1,9 @@
 use lossprint::{
-    audio::Error as AudioError, Encoder, Error as LossprintError, InitializationError, MediaSource,
-    Scanner, ScoreError, TrackScore,
+    audio::Error as AudioError, Encoder, InitializationError, MediaSource, Scanner, ScoreError,
+    TrackScore,
 };
-use std::io::Cursor;
+use std::fs::File;
+use std::io::{BufReader, Cursor};
 
 fn assert_send_and_sync<T: Send + Sync>() {}
 
@@ -51,22 +52,15 @@ fn classify_score_error(error: &ScoreError) -> &'static str {
     }
 }
 
-fn classify_error(error: &LossprintError) -> &'static str {
-    match error {
-        LossprintError::Initialization(_) => "initialization",
-        LossprintError::Score(error) => classify_score_error(error),
-        _ => "future_error",
-    }
-}
-
 #[test]
 fn documented_public_types_and_call_shapes_compile() {
     assert_send_and_sync::<Scanner>();
     assert_public_error::<InitializationError>();
     assert_public_error::<AudioError>();
     assert_public_error::<ScoreError>();
-    assert_public_error::<LossprintError>();
 
+    assert_media_source::<File>();
+    assert_media_source::<BufReader<File>>();
     assert_media_source::<Cursor<Vec<u8>>>();
     assert_media_source::<&mut Cursor<Vec<u8>>>();
     assert_media_source::<dyn MediaSource>();
@@ -79,7 +73,6 @@ fn documented_public_types_and_call_shapes_compile() {
         score_borrowed_dyn;
     let _: fn(&Scanner, Box<dyn MediaSource>) -> Result<TrackScore, ScoreError> = score_boxed_dyn;
     let _: fn(&TrackScore) = inspect_score;
-    let _: lossprint::Result<()> = Ok(());
 
     assert_eq!(Encoder::Mp3.as_str(), "mp3");
     assert_eq!(Encoder::Mp3.to_string(), "mp3");
@@ -95,7 +88,4 @@ fn public_errors_can_be_classified_without_exhaustive_matches() {
         source.downcast_ref::<AudioError>(),
         Some(AudioError::TooShort)
     ));
-
-    let error = LossprintError::from(score_error);
-    assert_eq!(classify_error(&error), "too_short");
 }

@@ -10,56 +10,6 @@ pub(crate) const ENCODER_COUNT: usize = 9;
 
 const MODEL: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/model.onnx"));
 
-/// A failure while loading the embedded model.
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum InitializationError {
-    /// The embedded ONNX bytes could not be parsed.
-    #[error("could not parse the embedded ONNX model: {0}")]
-    Parse(#[source] Box<dyn std::error::Error + Send + Sync>),
-    /// The parsed model could not be optimized.
-    #[error("could not optimize the embedded ONNX model: {0}")]
-    Optimize(#[source] Box<dyn std::error::Error + Send + Sync>),
-    /// The optimized model could not be made runnable.
-    #[error("could not prepare the embedded ONNX model: {0}")]
-    Prepare(#[source] Box<dyn std::error::Error + Send + Sync>),
-}
-
-/// A failure while running the embedded model.
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum InferenceError {
-    /// The inference runtime failed.
-    #[error("could not run the ONNX model: {0}")]
-    Run(#[source] Box<dyn std::error::Error + Send + Sync>),
-    /// The fixed model returned the wrong number of output heads.
-    #[error("model returned {actual} outputs; expected 3")]
-    UnexpectedOutputCount {
-        /// Number of output heads returned by the model.
-        actual: usize,
-    },
-    /// The fixed model's transcode output is not float32.
-    #[error("model's transcode output is not float32")]
-    InvalidTranscodeOutputType,
-    /// The fixed model's encoder output is not float32.
-    #[error("model's encoder output is not float32")]
-    InvalidEncoderOutputType,
-    /// The fixed model's encoder output is not stored contiguously.
-    #[error("model's encoder output is not contiguous")]
-    NonContiguousEncoderOutput,
-    /// The fixed model returned the wrong number of predictions.
-    #[error(
-        "model returned the wrong output shape for {windows} windows: \
-         {transcode_values} transcode values and {encoder_values} encoder values"
-    )]
-    UnexpectedOutputShape {
-        /// Number of input windows.
-        windows: usize,
-        /// Number of returned transcode values.
-        transcode_values: usize,
-        /// Number of returned encoder values.
-        encoder_values: usize,
-    },
-}
-
 pub(crate) struct WindowScore {
     pub transcode_probability: f32,
     pub encoder_probabilities: [f32; ENCODER_COUNT],
@@ -70,52 +20,50 @@ pub(crate) struct Model {
 }
 
 impl Model {
-    pub(crate) fn new() -> Result<Self, InitializationError> {
+    pub(crate) fn new() -> TractResult<Self> {
         let mut cursor = Cursor::new(MODEL);
         let model = tract_onnx::onnx()
             .model_for_read(&mut cursor)
-            .map_err(|error| InitializationError::Parse(error.into_boxed_dyn_error()))?;
-        let runnable = model
+            .map_err(|error| error.context("could not parse the embedded ONNX model"))?
             .into_optimized()
-            .map_err(|error| InitializationError::Optimize(error.into_boxed_dyn_error()))?
+            .map_err(|error| error.context("could not optimize the embedded ONNX model"))?;
+        let runnable = model
             .into_runnable()
-            .map_err(|error| InitializationError::Prepare(error.into_boxed_dyn_error()))?;
+            .map_err(|error| error.context("could not prepare the embedded ONNX model"))?;
         Ok(Self { runnable })
     }
 
-    pub(crate) fn run(&self, input: &[f32]) -> Result<Vec<WindowScore>, InferenceError> {
-        debug_assert!(!input.is_empty());
-        debug_assert!(input.len().is_multiple_of(WINDOW_VALUES));
+    pub(crate) fn run(&self, input: Vec<f32>) -> TractResult<Vec<WindowScore>> {
         let batch = input.len() / WINDOW_VALUES;
-        let input =
-            tract_ndarray::Array4::from_shape_vec((batch, 2, N_BINS, N_FRAMES), input.to_vec())
-                .expect("window-aligned input fits the model shape")
-                .into_tensor();
+        let input = tract_ndarray::Array4::from_shape_vec((batch, 2, N_BINS, N_FRAMES), input)
+            .expect("window-aligned input fits the model shape")
+            .into_tensor();
         let outputs = self
             .runnable
             .run(tvec!(input.into()))
-            .map_err(|error| InferenceError::Run(error.into_boxed_dyn_error()))?;
-        if outputs.len() != 3 {
-            return Err(InferenceError::UnexpectedOutputCount {
-                actual: outputs.len(),
-            });
-        }
-        let transcode = outputs[0]
+            .map_err(|error| error.context("could not run the ONNX model"))?;
+        let [transcode, encoders, _bandwidth] = outputs.as_slice() else {
+            unreachable!("embedded model has exactly three outputs")
+        };
+        let transcode = transcode
             .to_plain_array_view::<f32>()
-            .map_err(|_| InferenceError::InvalidTranscodeOutputType)?;
-        let encoders = outputs[1]
+            .expect("embedded model's transcode output is float32");
+        let encoders = encoders
             .to_plain_array_view::<f32>()
-            .map_err(|_| InferenceError::InvalidEncoderOutputType)?;
+            .expect("embedded model's encoder output is float32");
         let encoders = encoders
             .as_slice()
-            .ok_or(InferenceError::NonContiguousEncoderOutput)?;
-        if transcode.len() != batch || encoders.len() != batch * ENCODER_COUNT {
-            return Err(InferenceError::UnexpectedOutputShape {
-                windows: batch,
-                transcode_values: transcode.len(),
-                encoder_values: encoders.len(),
-            });
-        }
+            .expect("tract outputs contiguous encoder probabilities");
+        assert_eq!(
+            transcode.len(),
+            batch,
+            "embedded model returns one transcode probability per window"
+        );
+        assert_eq!(
+            encoders.len(),
+            batch * ENCODER_COUNT,
+            "embedded model returns every encoder probability per window"
+        );
         Ok(transcode
             .iter()
             .zip(encoders.chunks_exact(ENCODER_COUNT))

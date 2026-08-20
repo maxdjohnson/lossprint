@@ -31,8 +31,6 @@ impl TransformCache {
 }
 
 pub(crate) struct Transform {
-    n_fft: usize,
-    hop: usize,
     crop_len: usize,
     window: Vec<f32>,
     fft: Arc<dyn Fft<f32>>,
@@ -41,7 +39,6 @@ pub(crate) struct Transform {
 impl Transform {
     pub(crate) fn new(sample_rate: u32) -> Self {
         let n_fft = fft_size(sample_rate);
-        let hop = n_fft / 2;
         let crop_len = sample_rate as usize / 2;
         let window = (0..n_fft)
             .map(|index| {
@@ -51,8 +48,6 @@ impl Transform {
             .collect();
         let fft = FftPlanner::new().plan_fft_forward(n_fft);
         Self {
-            n_fft,
-            hop,
             crop_len,
             window,
             fft,
@@ -67,8 +62,8 @@ impl Transform {
             .iter()
             .all(|channel| start + crop_len <= channel.len())));
 
-        let mut output = vec![0.0_f32; starts.len() * WINDOW_VALUES];
-        let mut buffer = vec![Complex32::new(0.0, 0.0); self.n_fft];
+        let mut output = vec![LOG_FLOOR; starts.len() * WINDOW_VALUES];
+        let mut buffer = vec![Complex32::new(0.0, 0.0); self.window.len()];
         let mut scratch = vec![Complex32::new(0.0, 0.0); self.fft.get_inplace_scratch_len()];
         for (&start, output) in starts.iter().zip(output.chunks_exact_mut(WINDOW_VALUES)) {
             self.write_window(channels, start, output, &mut buffer, &mut scratch);
@@ -93,7 +88,6 @@ impl Transform {
                 buffer,
                 scratch,
             );
-            output[plane..].fill(LOG_FLOOR);
         } else {
             self.write_plane(
                 |index| (channels[0][start + index] + channels[1][start + index]) * 0.5_f32,
@@ -119,12 +113,12 @@ impl Transform {
     ) where
         F: Fn(usize) -> f32,
     {
-        let padding = self.n_fft / 2;
-        let bins = (self.n_fft / 2 + 1).min(N_BINS);
-        let frames = (self.crop_len / self.hop + 1).min(N_FRAMES);
-        output.fill(LOG_FLOOR);
+        let hop = self.window.len() / 2;
+        let padding = hop;
+        let bins = (hop + 1).min(N_BINS);
+        let frames = (self.crop_len / hop + 1).min(N_FRAMES);
         for frame in 0..frames {
-            let frame_start = frame * self.hop;
+            let frame_start = frame * hop;
             for (offset, slot) in buffer.iter_mut().enumerate() {
                 let padded = frame_start + offset;
                 let source = reflect(padded as isize - padding as isize, self.crop_len);

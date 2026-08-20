@@ -31,11 +31,24 @@ mod spectrogram;
 use model::{Model, WindowScore, ENCODER_COUNT};
 use spectrogram::TransformCache;
 use std::fmt;
+use tract_onnx::prelude::TractError;
 
 pub use audio::MediaSource;
 
-/// A convenience result for code that both constructs and uses a scanner.
-pub type Result<T> = std::result::Result<T, Error>;
+#[derive(Debug)]
+struct ModelFailure(TractError);
+
+impl fmt::Display for ModelFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{:#}", self.0)
+    }
+}
+
+impl std::error::Error for ModelFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.0.chain().next()
+    }
+}
 
 /// A failure while initializing a [`Scanner`].
 ///
@@ -46,15 +59,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[error("model initialization failed: {source}")]
 pub struct InitializationError {
     #[source]
-    source: Box<dyn std::error::Error + Send + Sync + 'static>,
-}
-
-impl InitializationError {
-    fn new(error: impl std::error::Error + Send + Sync + 'static) -> Self {
-        Self {
-            source: Box::new(error),
-        }
-    }
+    source: ModelFailure,
 }
 
 /// A failure while scoring an audio media source.
@@ -70,24 +75,6 @@ pub enum ScoreError {
     /// The model could not score prepared audio.
     #[error("model inference failed: {0}")]
     Inference(#[source] Box<dyn std::error::Error + Send + Sync + 'static>),
-}
-
-impl ScoreError {
-    fn inference(error: impl std::error::Error + Send + Sync + 'static) -> Self {
-        Self::Inference(Box::new(error))
-    }
-}
-
-/// A convenience error for code that both constructs and uses a scanner.
-#[derive(Debug, thiserror::Error)]
-#[non_exhaustive]
-pub enum Error {
-    /// Scanner initialization failed.
-    #[error(transparent)]
-    Initialization(#[from] InitializationError),
-    /// Scoring failed.
-    #[error(transparent)]
-    Score(#[from] ScoreError),
 }
 
 const ENCODERS: [Encoder; ENCODER_COUNT] = [
@@ -215,7 +202,9 @@ pub struct Scanner {
 impl Scanner {
     /// Construct a scanner using the downloaded-and-embedded model.
     pub fn new() -> std::result::Result<Self, InitializationError> {
-        let model = Model::new().map_err(InitializationError::new)?;
+        let model = Model::new().map_err(|error| InitializationError {
+            source: ModelFailure(error),
+        })?;
         Ok(Self {
             model,
             transforms: TransformCache::default(),
@@ -225,11 +214,10 @@ impl Scanner {
     /// Score one WAV, AIFF, or FLAC media source.
     pub fn score<S: MediaSource>(&self, source: S) -> std::result::Result<TrackScore, ScoreError> {
         let windows = prepare(source, &self.transforms)?;
-        self.score_windows(&windows)
-    }
-
-    fn score_windows(&self, windows: &[f32]) -> std::result::Result<TrackScore, ScoreError> {
-        let scores = self.model.run(windows).map_err(ScoreError::inference)?;
+        let scores = self
+            .model
+            .run(windows)
+            .map_err(|error| ScoreError::Inference(Box::new(ModelFailure(error))))?;
         Ok(TrackScore::pool(&scores))
     }
 }
@@ -279,53 +267,13 @@ impl TrackScore {
 mod tests {
     use super::*;
 
-    #[derive(Debug, thiserror::Error)]
-    #[error("backend detail")]
-    struct BackendError;
-
     #[test]
-    fn public_errors_preserve_backend_sources() {
-        fn assert_public_error<T: std::error::Error + Send + Sync + 'static>() {}
-        assert_public_error::<InitializationError>();
-        assert_public_error::<audio::Error>();
-        assert_public_error::<ScoreError>();
-        assert_public_error::<Error>();
-
-        let initialization = InitializationError::new(BackendError);
-        assert_eq!(
-            initialization.to_string(),
-            "model initialization failed: backend detail"
-        );
-        assert_eq!(
-            std::error::Error::source(&initialization)
-                .unwrap()
-                .to_string(),
-            "backend detail"
-        );
-
-        let audio = ScoreError::from(audio::Error::Probe(Box::new(BackendError)));
-        assert!(matches!(&audio, ScoreError::Audio(_)));
-        assert_eq!(
-            audio.to_string(),
-            "could not recognize audio format: backend detail"
-        );
-        let audio_source = std::error::Error::source(&audio).unwrap();
-        assert_eq!(
-            audio_source.to_string(),
-            "could not recognize audio format: backend detail"
-        );
-        assert_eq!(audio_source.source().unwrap().to_string(), "backend detail");
-
-        let inference = ScoreError::inference(BackendError);
-        assert!(matches!(&inference, ScoreError::Inference(_)));
-        assert_eq!(
-            inference.to_string(),
-            "model inference failed: backend detail"
-        );
-        assert_eq!(
-            std::error::Error::source(&inference).unwrap().to_string(),
-            "backend detail"
-        );
+    fn model_failures_display_and_preserve_context() {
+        let failure = ModelFailure(TractError::msg("backend detail").context("operation"));
+        assert_eq!(failure.to_string(), "operation: backend detail");
+        let context = std::error::Error::source(&failure).unwrap();
+        assert_eq!(context.to_string(), "operation");
+        assert_eq!(context.source().unwrap().to_string(), "backend detail");
     }
 
     #[test]
@@ -395,19 +343,5 @@ mod tests {
         assert!((score.encoder_probability(Encoder::FfmpegAac) - aac / total).abs() < 1e-6);
         assert!((score.encoder_probability(Encoder::AacAt) - floor / total).abs() < 1e-8);
         assert!((score.encoder_probability(Encoder::Musepack) - floor / total).abs() < 1e-8);
-    }
-
-    #[test]
-    fn scanner_is_send_and_sync() {
-        fn assert_send_and_sync<T: Send + Sync>() {}
-        assert_send_and_sync::<Scanner>();
-    }
-
-    #[test]
-    fn common_seekable_readers_are_media_sources() {
-        fn assert_media_source<T: MediaSource>() {}
-        assert_media_source::<std::fs::File>();
-        assert_media_source::<std::io::Cursor<Vec<u8>>>();
-        assert_media_source::<std::io::BufReader<std::fs::File>>();
     }
 }

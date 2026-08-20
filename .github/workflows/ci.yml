@@ -54,9 +54,9 @@ jobs:
         with:
           package: lossprint
           feature-group: only-explicit-features
-          # Keep the API source-compatible even while preparing a major release.
-          # An intentional breaking release must explicitly change this gate.
-          release-type: minor
+          # The next release intentionally removes the unused v0.6 umbrella errors.
+          # Restore `minor` after publishing that breaking release.
+          release-type: major
 
   build:
     name: Build and integration test (${{ matrix.target }})

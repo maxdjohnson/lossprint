@@ -2,7 +2,7 @@
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, ValueEnum};
-use lossprint::{Encoder, Scanner};
+use lossprint::Scanner;
 use rayon::prelude::*;
 use std::fs::File;
 use std::io::{BufWriter, Write};
@@ -54,19 +54,12 @@ enum OutputFormat {
     Jsonl,
 }
 
+#[derive(serde::Serialize)]
 struct OutputRow<'a> {
     transcode_probability: f32,
     verdict: &'static str,
-    encoder: Option<Encoder>,
-    path: &'a Path,
-}
-
-#[derive(serde::Serialize)]
-struct JsonRecord<'a> {
-    transcode_probability: f32,
-    verdict: &'static str,
     encoder: Option<&'static str>,
-    path: &'a str,
+    path: &'a Path,
 }
 
 fn main() -> Result<()> {
@@ -104,7 +97,7 @@ fn main() -> Result<()> {
                     ("clean", None)
                 } else {
                     let (encoder, _) = score.most_likely_encoder();
-                    ("transcode", Some(encoder))
+                    ("transcode", Some(encoder.as_str()))
                 };
                 if args.output == OutputFormat::Jsonl && path.to_str().is_none() {
                     failures += 1;
@@ -146,13 +139,13 @@ fn write_table(writer: &mut impl Write, rows: &[OutputRow<'_>]) -> std::io::Resu
         "PROBABILITY", "VERDICT", "ENCODER"
     )?;
     for row in rows {
-        let probability = format!("{:.7}", row.transcode_probability);
-        let encoder = row.encoder.map(Encoder::as_str).unwrap_or("-");
-        let path = format!("{:?}", row.path);
+        let encoder = row.encoder.unwrap_or("-");
         writeln!(
             writer,
-            "{probability:<11}  {verdict:<9}  {encoder:<10}  {path}",
+            "{probability:<11.7}  {verdict:<9}  {encoder:<10}  {path:?}",
+            probability = row.transcode_probability,
             verdict = row.verdict,
+            path = row.path,
         )?;
     }
     Ok(())
@@ -160,17 +153,7 @@ fn write_table(writer: &mut impl Write, rows: &[OutputRow<'_>]) -> std::io::Resu
 
 fn write_jsonl(writer: &mut impl Write, rows: &[OutputRow<'_>]) -> Result<()> {
     for row in rows {
-        let path = row
-            .path
-            .to_str()
-            .expect("JSONL paths are validated before output");
-        let record = JsonRecord {
-            transcode_probability: row.transcode_probability,
-            verdict: row.verdict,
-            encoder: row.encoder.map(Encoder::as_str),
-            path,
-        };
-        serde_json::to_writer(&mut *writer, &record).context("could not write JSONL output")?;
+        serde_json::to_writer(&mut *writer, row).context("could not write JSONL output")?;
         writeln!(writer)?;
     }
     Ok(())
