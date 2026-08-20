@@ -116,7 +116,7 @@ pub enum ScoreError {
     Inference(#[from] ModelError),
 }
 
-const ENCODERS: [Encoder; ENCODER_COUNT] = [
+const MODEL_ENCODERS: [Encoder; ENCODER_COUNT] = [
     Encoder::Mp3,
     Encoder::FfmpegAac,
     Encoder::AacAt,
@@ -129,28 +129,30 @@ const ENCODERS: [Encoder; ENCODER_COUNT] = [
 ];
 
 /// A source encoder class predicted by the model.
+///
+/// Ordering follows the lexicographic order of the stable identifiers returned
+/// by [`Encoder::as_str`].
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[non_exhaustive]
-#[repr(usize)]
 pub enum Encoder {
-    /// MP3.
-    Mp3,
-    /// FFmpeg's native AAC encoder.
-    FfmpegAac,
     /// Apple AudioToolbox AAC.
     AacAt,
     /// Fraunhofer FDK AAC.
     FdkAac,
-    /// Vorbis.
-    Vorbis,
-    /// Opus.
-    Opus,
+    /// FFmpeg's native AAC encoder.
+    FfmpegAac,
     /// MP2.
     Mp2,
-    /// Windows Media Audio.
-    Wma,
+    /// MP3.
+    Mp3,
     /// Musepack.
     Musepack,
+    /// Opus.
+    Opus,
+    /// Vorbis.
+    Vorbis,
+    /// Windows Media Audio.
+    Wma,
 }
 
 impl Encoder {
@@ -170,8 +172,18 @@ impl Encoder {
         }
     }
 
-    const fn index(self) -> usize {
-        self as usize
+    const fn model_index(self) -> usize {
+        match self {
+            Self::Mp3 => 0,
+            Self::FfmpegAac => 1,
+            Self::AacAt => 2,
+            Self::FdkAac => 3,
+            Self::Vorbis => 4,
+            Self::Opus => 5,
+            Self::Mp2 => 6,
+            Self::Wma => 7,
+            Self::Musepack => 8,
+        }
     }
 }
 
@@ -192,7 +204,7 @@ impl FromStr for Encoder {
 
     /// Parse an identifier produced by [`Encoder::as_str`].
     fn from_str(text: &str) -> Result<Self, Self::Err> {
-        ENCODERS
+        MODEL_ENCODERS
             .into_iter()
             .find(|encoder| encoder.as_str() == text)
             .ok_or(UnknownEncoder)
@@ -216,14 +228,14 @@ impl TrackScore {
     /// Return the probability for one encoder class (conditional on being a transcode).
     #[must_use]
     pub fn encoder_probability(&self, encoder: Encoder) -> f32 {
-        self.encoder_probabilities[encoder.index()]
+        self.encoder_probabilities[encoder.model_index()]
     }
 
     /// Iterate over every encoder and conditional probability.
     ///
     /// The iteration order is unspecified and may change with the model.
     pub fn encoder_probabilities(&self) -> impl Iterator<Item = (Encoder, f32)> + '_ {
-        ENCODERS
+        MODEL_ENCODERS
             .into_iter()
             .zip(self.encoder_probabilities.iter().copied())
     }
@@ -405,7 +417,7 @@ mod tests {
     #[test]
     fn encoder_identifiers_are_stable() {
         assert_eq!(
-            ENCODERS.map(Encoder::as_str),
+            MODEL_ENCODERS.map(Encoder::as_str),
             [
                 "mp3",
                 "ffmpeg_aac",
@@ -421,15 +433,36 @@ mod tests {
     }
 
     #[test]
-    fn encoder_discriminants_match_their_position() {
-        for (position, encoder) in ENCODERS.into_iter().enumerate() {
-            assert_eq!(encoder.index(), position);
+    fn encoder_model_columns_are_explicit() {
+        for (position, encoder) in MODEL_ENCODERS.into_iter().enumerate() {
+            assert_eq!(encoder.model_index(), position);
         }
     }
 
     #[test]
+    fn encoder_order_follows_its_stable_identifier() {
+        let mut encoders = MODEL_ENCODERS;
+        encoders.sort_unstable();
+
+        assert_eq!(
+            encoders.map(Encoder::as_str),
+            [
+                "aac_at",
+                "fdk_aac",
+                "ffmpeg_aac",
+                "mp2",
+                "mp3",
+                "musepack",
+                "opus",
+                "vorbis",
+                "wma",
+            ]
+        );
+    }
+
+    #[test]
     fn encoder_identifiers_round_trip() {
-        for encoder in ENCODERS {
+        for encoder in MODEL_ENCODERS {
             assert_eq!(encoder.as_str().parse::<Encoder>(), Ok(encoder));
         }
         assert_eq!("MP3".parse::<Encoder>(), Err(UnknownEncoder));

@@ -108,6 +108,13 @@ fn encoder_identifiers_round_trip_outside_the_crate() {
 }
 
 #[test]
+fn encoder_order_is_alphabetical() {
+    let mut encoders = [Encoder::Mp3, Encoder::Opus, Encoder::Musepack];
+    encoders.sort_unstable();
+    assert_eq!(encoders, [Encoder::Mp3, Encoder::Musepack, Encoder::Opus]);
+}
+
+#[test]
 fn decode_errors_stay_reachable_through_the_source_chain() {
     let error = ScoreError::from(DecodeError::NotLinearPcm);
     assert_eq!(classify(&error), "not_linear_pcm");
