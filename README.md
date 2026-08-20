@@ -19,7 +19,7 @@ and **92.0–99.7% of AAC files**. See the
 
 ### Brew
 
-On macOS, to install with Homebrew:
+On Apple Silicon macOS, install with Homebrew:
 
 ```bash
 brew install maxdjohnson/tap/lossprint
@@ -27,7 +27,8 @@ brew install maxdjohnson/tap/lossprint
 
 ### Binaries
 
-Download macOS, Linux (x86-64 or ARM64) and Windows (x86-64) binaries from the [latest GitHub release](https://github.com/maxdjohnson/lossprint/releases/latest).
+Download Apple Silicon macOS, Linux (x86-64 or ARM64), and Windows (x86-64)
+binaries from the [latest GitHub release](https://github.com/maxdjohnson/lossprint/releases/latest).
 
 ### Cargo
 
