@@ -8,13 +8,15 @@ import sys
 import tempfile
 from pathlib import Path
 
+# name -> (transcode probability, verdict, encoder, bitrate in kbps)
 EXPECTED = {
-    "musdb18-hq-1.wav": (0.0006546, "clean", None),
-    "musdb18-hq-1.mp3.wav": (0.9997401, "transcode", "mp3"),
+    "musdb18-hq-1.wav": (0.0000129, "clean", None, None),
+    "musdb18-hq-1.mp3.wav": (1.0000000, "transcode", "mp3", 323.9),
 }
 PROBABILITY_TOLERANCE = 5e-4
-JSON_FIELDS = {"transcode_probability", "verdict", "encoder", "path"}
-TABLE_HEADER = "PROBABILITY  VERDICT    ENCODER     PATH"
+BITRATE_TOLERANCE = 2.0
+JSON_FIELDS = {"transcode_probability", "verdict", "encoder", "bitrate_kbps", "path"}
+TABLE_HEADER = "PROBABILITY  VERDICT    ENCODER     KBPS  PATH"
 
 
 def fail(message: str) -> None:
@@ -78,6 +80,19 @@ def assert_probability(actual: object, expected: float, name: str) -> None:
         fail(f"unexpected probability for {name}: {actual!r}; expected {expected:.7f}")
 
 
+def assert_bitrate(actual: object, expected: float | None, name: str) -> None:
+    if expected is None:
+        if actual is not None:
+            fail(f"unexpected bitrate for clean {name}: {actual!r}")
+        return
+    if (
+        isinstance(actual, bool)
+        or not isinstance(actual, (int, float))
+        or not math.isclose(actual, expected, rel_tol=0.0, abs_tol=BITRATE_TOLERANCE)
+    ):
+        fail(f"unexpected bitrate for {name}: {actual!r}; expected {expected:.1f}")
+
+
 def assert_jsonl_output(output: str, fixtures: Path) -> None:
     try:
         records = [json.loads(line) for line in output.splitlines()]
@@ -101,10 +116,11 @@ def assert_jsonl_output(output: str, fixtures: Path) -> None:
         ):
             fail(f"unexpected fixture path: {path!r}")
 
-        probability, verdict, encoder = values
+        probability, verdict, encoder, bitrate = values
         assert_probability(record["transcode_probability"], probability, name)
         if (record["verdict"], record["encoder"]) != (verdict, encoder):
             fail(f"unexpected classification for {name}: {record!r}")
+        assert_bitrate(record["bitrate_kbps"], bitrate, name)
 
 
 def assert_table_output(output: str, fixtures: Path) -> None:
@@ -116,20 +132,28 @@ def assert_table_output(output: str, fixtures: Path) -> None:
         fail(f"unexpected table header: {lines[0]!r}")
 
     for line, (name, values) in zip(lines[1:], expected, strict=True):
-        fields = line.split(maxsplit=3)
-        if len(fields) != 4:
+        fields = line.split(maxsplit=4)
+        if len(fields) != 5:
             fail(f"unexpected table row: {line!r}")
 
-        probability, verdict, encoder = values
+        probability, verdict, encoder, bitrate = values
         try:
             actual_probability = float(fields[0])
         except ValueError:
             fail(f"invalid table probability for {name}: {fields[0]!r}")
         assert_probability(actual_probability, probability, name)
+        if bitrate is None:
+            bitrate_text = "-"
+        else:
+            try:
+                assert_bitrate(float(fields[3]), bitrate, name)
+            except ValueError:
+                fail(f"invalid table bitrate for {name}: {fields[3]!r}")
+            bitrate_text = fields[3]
 
         expected_line = (
             f"{actual_probability:<11.7f}  {verdict:<9}  {(encoder or '-'):<10}  "
-            f"{json.dumps(str(fixtures / name), ensure_ascii=False)}"
+            f"{bitrate_text:>4}  {json.dumps(str(fixtures / name), ensure_ascii=False)}"
         )
         if line != expected_line:
             fail(f"unexpected table row for {name}: {line!r}")
@@ -143,7 +167,7 @@ def assert_partial_failure(binary: Path, fixtures: Path) -> None:
     assert_jsonl_output(result.stdout, fixtures)
     for message in (
         str(short_file),
-        "audio is shorter than the 0.5-second analysis window",
+        "audio is shorter than the 2-second minimum",
         "could not scan 1 file(s)",
     ):
         if message not in result.stderr:

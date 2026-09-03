@@ -5,7 +5,7 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 const MODEL_PATH: &str = "model/model.onnx";
-const MODEL_SHA256: &str = "33c74bde418b8330f7e67222afb2ab53706c136281bddd19ec0870b81ddce89a";
+const MODEL_SHA256: &str = "ca86c67b4035485a9c1a3b3120b4a555cb7af87b4dd28837c46b297f82c48e7d";
 
 fn verify(path: &Path) -> io::Result<()> {
     let mut file = fs::File::open(path)?;

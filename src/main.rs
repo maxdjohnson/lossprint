@@ -17,8 +17,9 @@ const SUPPORTED_EXTENSIONS: [&str; 4] = ["aif", "aiff", "flac", "wav"];
     version,
     about = "Detect lossy transcodes hiding in lossless audio files",
     after_help = "Scans WAV, AIFF, and FLAC files. The default output is an aligned\n\
-                  table; use -o jsonl for machine-readable output. Raise --threshold\n\
-                  to reduce false positives; lower it to favor recall.\n\n\
+                  table; use -o jsonl for machine-readable output. Flagged files\n\
+                  also report the likely source encoder and bitrate. Raise\n\
+                  --threshold to reduce false positives; lower it to favor recall.\n\n\
                   Includes Symphonia under MPL-2.0."
 )]
 struct Args {
@@ -58,6 +59,7 @@ struct OutputRow<'a> {
     transcode_probability: f32,
     verdict: &'static str,
     encoder: Option<&'static str>,
+    bitrate_kbps: Option<f32>,
     path: &'a Path,
 }
 
@@ -92,11 +94,15 @@ fn main() -> Result<()> {
         match result {
             Ok(score) => {
                 let probability = score.transcode_probability();
-                let (verdict, encoder) = if probability < args.threshold {
-                    ("clean", None)
+                let (verdict, encoder, bitrate_kbps) = if probability < args.threshold {
+                    ("clean", None, None)
                 } else {
                     let (encoder, _) = score.most_likely_encoder();
-                    ("transcode", Some(encoder.as_str()))
+                    (
+                        "transcode",
+                        Some(encoder.as_str()),
+                        Some((score.bitrate_kbps() * 10.0).round() / 10.0),
+                    )
                 };
                 if args.output == OutputFormat::Jsonl && path.to_str().is_none() {
                     failures += 1;
@@ -110,6 +116,7 @@ fn main() -> Result<()> {
                     transcode_probability: probability,
                     verdict,
                     encoder,
+                    bitrate_kbps,
                     path,
                 });
             }
@@ -134,14 +141,17 @@ fn main() -> Result<()> {
 fn write_table(writer: &mut impl Write, rows: &[OutputRow<'_>]) -> std::io::Result<()> {
     writeln!(
         writer,
-        "{:<11}  {:<9}  {:<10}  PATH",
-        "PROBABILITY", "VERDICT", "ENCODER"
+        "{:<11}  {:<9}  {:<10}  {:>4}  PATH",
+        "PROBABILITY", "VERDICT", "ENCODER", "KBPS"
     )?;
     for row in rows {
         let encoder = row.encoder.unwrap_or("-");
+        let bitrate = row
+            .bitrate_kbps
+            .map_or_else(|| "-".to_owned(), |kbps| format!("{kbps:.0}"));
         writeln!(
             writer,
-            "{probability:<11.7}  {verdict:<9}  {encoder:<10}  {path:?}",
+            "{probability:<11.7}  {verdict:<9}  {encoder:<10}  {bitrate:>4}  {path:?}",
             probability = row.transcode_probability,
             verdict = row.verdict,
             path = row.path,
@@ -198,19 +208,31 @@ mod tests {
 
     #[test]
     fn table_escapes_path_control_characters() {
-        let rows = [OutputRow {
-            transcode_probability: 0.25,
-            verdict: "clean",
-            encoder: None,
-            path: Path::new("quoted\tpath\n.wav"),
-        }];
+        let rows = [
+            OutputRow {
+                transcode_probability: 0.25,
+                verdict: "clean",
+                encoder: None,
+                bitrate_kbps: None,
+                path: Path::new("quoted\tpath\n.wav"),
+            },
+            OutputRow {
+                transcode_probability: 0.9,
+                verdict: "transcode",
+                encoder: Some("mp3"),
+                bitrate_kbps: Some(191.6),
+                path: Path::new("suspect.flac"),
+            },
+        ];
         let mut output = Vec::new();
 
         write_table(&mut output, &rows).unwrap();
 
         let output = String::from_utf8(output).unwrap();
-        assert_eq!(output.lines().count(), 2);
+        assert_eq!(output.lines().count(), 3);
         assert!(output.contains(r#""quoted\tpath\n.wav""#));
+        assert!(output.contains("transcode  mp3          192  \"suspect.flac\""));
+        assert!(output.contains("clean      -              -  "));
     }
 
     #[test]
@@ -219,6 +241,7 @@ mod tests {
             transcode_probability: 0.25,
             verdict: "clean",
             encoder: None,
+            bitrate_kbps: None,
             path: Path::new("quoted\t\"path.wav"),
         }];
         let mut output = Vec::new();
@@ -231,6 +254,7 @@ mod tests {
         assert_eq!(record["transcode_probability"], 0.25);
         assert_eq!(record["verdict"], "clean");
         assert!(record["encoder"].is_null());
+        assert!(record["bitrate_kbps"].is_null());
         assert_eq!(record["path"], "quoted\t\"path.wav");
     }
 }

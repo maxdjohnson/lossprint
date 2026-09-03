@@ -11,9 +11,9 @@ from pathlib import Path
 
 MODEL_URL = (
     "https://huggingface.co/maxdj/lossprint/resolve/"
-    "c6ca3dd209e39c21b8ce48e235f759ac931cf914/model.onnx?download=true"
+    "v1.0/model.onnx?download=true"
 )
-MODEL_SHA256 = "33c74bde418b8330f7e67222afb2ab53706c136281bddd19ec0870b81ddce89a"
+MODEL_SHA256 = "ca86c67b4035485a9c1a3b3120b4a555cb7af87b4dd28837c46b297f82c48e7d"
 MODEL_PATH = Path(__file__).resolve().parents[1] / "model" / "model.onnx"
 CHUNK_SIZE = 1024 * 1024
 

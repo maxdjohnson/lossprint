@@ -45,7 +45,7 @@ jobs:
         run: |
           set -euo pipefail
           model="model/model.onnx"
-          expected_sha="33c74bde418b8330f7e67222afb2ab53706c136281bddd19ec0870b81ddce89a"
+          expected_sha="ca86c67b4035485a9c1a3b3120b4a555cb7af87b4dd28837c46b297f82c48e7d"
 
           test -z "$(git status --porcelain --untracked-files=all)"
           test -z "$(git ls-files -- '*.onnx')"

@@ -76,7 +76,7 @@ fn a_scanner_is_shareable_and_scores_a_real_file() {
     assert_send_and_sync::<Scanner>();
 
     let scanner = Scanner::new().expect("the embedded model initializes");
-    let bytes = wav(&noise(44_100, 2), 2, 44_100);
+    let bytes = wav(&noise(3 * 44_100, 2), 2, 44_100);
 
     let scored = score(&scanner, &bytes, "ok").expect("a real file scores");
 
@@ -95,6 +95,11 @@ fn a_scanner_is_shareable_and_scores_a_real_file() {
         .encoder_probabilities()
         .all(|(_, other)| other <= probability + 1e-6));
     assert!(!encoder.as_str().is_empty());
+    let bitrate = scored.bitrate_kbps();
+    assert!(
+        bitrate.is_finite() && bitrate > 0.0,
+        "bitrate is a positive estimate: {bitrate}"
+    );
 }
 
 #[test]
@@ -140,6 +145,6 @@ fn unsupported_audio_is_reported_as_a_typed_error() {
         "unsupported_channel_count"
     );
 
-    let short = score(&scanner, &wav(&noise(200, 2), 2, 44_100), "short");
+    let short = score(&scanner, &wav(&noise(44_100, 2), 2, 44_100), "short");
     assert_eq!(classify(&short.unwrap_err()), "too_short");
 }
